@@ -4,7 +4,7 @@ import { GeneralSettings, OrderItem, BlingInvoice, BlingProduct, BlingSettings, 
 import { fetchBlingOrders, fetchBlingInvoices, fetchEtiquetaZplForPedido, fetchBlingProducts, executeBlingTokenExchange, executeTokenRefresh, syncBlingOrders, syncBlingInvoices } from '../lib/blingApi';
 import { addPendingZplItem } from '../utils/pendingZpl';
 import { BlingSync } from '../components/BlingSync';
-import { NFeManager } from '../components/NFeManager';
+// NFeManager integrado diretamente no BlingPage
 import { Cloud, Zap, Link as LinkIcon, Settings, Loader2, CheckCircle, Info, FileText, ShoppingCart, Download, Printer, Lock, Package, Search, Save, Eye, EyeOff, X, AlertTriangle, RefreshCw, ToggleLeft, ToggleRight, FileOutput, ExternalLink, Filter, HelpCircle, ChevronDown, ChevronRight, Copy, TrendingDown, ShoppingBag, CheckSquare, Square, Tag, Send, History, Clock, User, MapPin, CreditCard } from 'lucide-react';
 
 // Transforma pedido do endpoint de sync para o formato OrderItem do ERP
@@ -62,7 +62,7 @@ const getSevenDaysAgo = () => {
     return d.toISOString().split('T')[0];
 };
 
-type Tab = 'catalogo' | 'nfe';
+type Tab = 'importacao' | 'nfe' | 'catalogo' | 'etiquetas';
 
 const DEFAULT_BLING_SCOPE: BlingScopeSettings = {
     importarProdutos: true,
@@ -688,7 +688,7 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
     const canViewProducts = scopeSettings.importarProdutos || !!scopeSettings.produtos;
 
     const getDefaultTab = (): Tab => {
-        return 'nfe';
+        return 'importacao';
     };
 
     const [activeTab, setActiveTab] = useState<Tab>(getDefaultTab());
@@ -756,7 +756,7 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
     });
 
     const [searchTerm, setSearchTerm] = useState('');
-    const [filterNfeStatus, setFilterNfeStatus] = useState<'TODOS' | 'EMITIDA' | 'PENDENTE' | 'SEM_NOTA'>('TODOS');
+    const [filterNfeStatus, setFilterNfeStatus] = useState<'TODOS' | 'EMITIDA' | 'PENDENTE' | 'SEM_NOTA' | 'AUTORIZADA_SEM_DANFE'>('TODOS');
     const [enrichedOrders, setEnrichedOrders] = useState<EnrichedBlingOrder[]>([]);
     const [products, setProducts] = useState<BlingProduct[]>([]);
     const [productSearch, setProductSearch] = useState('');
@@ -897,7 +897,7 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
                     }
 
                     // Refresh Invoice Data (Metadata only) if tab is open
-                    if (activeTab === 'notas') {
+                    if (activeTab === 'nfe') {
                         const invoices = await fetchBlingInvoices(token, { ...autoFilters, status: 'EMITIDAS' });
                         const invoiceMap = new Map<string, BlingInvoice>(invoices.map(inv => [inv.idPedidoVenda!, inv]));
                         
@@ -1434,7 +1434,7 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
     // ── Auto-fetch marketplace ao entrar na aba ───────────────────────────────
     useEffect(() => {
         if (
-            activeTab === 'pedidos_vendas' &&
+            activeTab === 'importacao' &&
             isConnected &&
             vendasDirectOrders.length === 0 &&
             !isLoadingVendas &&
@@ -1482,7 +1482,8 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
             if (filterNfeStatus !== 'TODOS') {
                  const status = order.invoice?.situacao?.toLowerCase() || '';
                  if (filterNfeStatus === 'EMITIDA') matchesNfe = status === 'emitida' || status === 'autorizada';
-                 else if (filterNfeStatus === 'PENDENTE') matchesNfe = order.invoice && status !== 'emitida' && status !== 'autorizada';
+                 else if (filterNfeStatus === 'PENDENTE') matchesNfe = !!order.invoice && status !== 'emitida' && status !== 'autorizada';
+                 else if (filterNfeStatus === 'AUTORIZADA_SEM_DANFE') matchesNfe = !!order.invoice && (status === 'autorizada' || status === 'emitida') && !order.invoice.linkDanfe;
                  else if (filterNfeStatus === 'SEM_NOTA') matchesNfe = !order.invoice;
             }
 
@@ -1552,212 +1553,16 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
                 </div>
             )}
 
-            {/* Tabs — Catálogo + Pedidos & Docs */}
+            {/* Tabs — Importação, NF-e, Etiquetas, Catálogo */}
             <div className="flex border-b overflow-x-auto">
-                <button onClick={() => setActiveTab('nfe')} className={`flex items-center gap-2 px-6 py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'nfe' ? 'border-purple-600 text-purple-700 bg-purple-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}><FileText size={16}/> Pedidos & Docs</button>
+                <button onClick={() => setActiveTab('importacao')} className={`flex items-center gap-2 px-6 py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'importacao' ? 'border-yellow-500 text-yellow-700 bg-yellow-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}><ShoppingBag size={16}/> Importação</button>
+                <button onClick={() => setActiveTab('nfe')} className={`flex items-center gap-2 px-6 py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'nfe' ? 'border-emerald-600 text-emerald-700 bg-emerald-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}><FileText size={16}/> NF-e</button>
+                <button onClick={() => setActiveTab('etiquetas')} className={`flex items-center gap-2 px-6 py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'etiquetas' ? 'border-blue-600 text-blue-700 bg-blue-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}><Printer size={16}/> Etiquetas {zplLotes.length > 0 && <span className="bg-blue-600 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full">{zplLotes.length}</span>}</button>
                 {canViewProducts && <button onClick={() => setActiveTab('catalogo')} className={`flex items-center gap-2 px-6 py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'catalogo' ? 'border-purple-600 text-purple-700 bg-purple-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}><Package size={16}/> Catálogo</button>}
             </div>
 
-            {/* Content: Sincronização */}
-            {activeTab === 'sincronizacao' && (
-                <div className="space-y-8">
-                    {/* Traditional Import Section */}
-                    <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-xl animate-in fade-in slide-in-from-bottom-4">
-                        <div className="flex justify-between items-start mb-6">
-                             <h2 className="text-xl font-black text-slate-800 uppercase tracking-tighter flex items-center gap-2"><Download className="text-blue-500"/> Importar Pedidos para Produção</h2>
-                             {settings?.autoSync && <div className="text-[10px] font-bold text-purple-600 bg-purple-50 px-3 py-1 rounded-full border border-purple-100 flex items-center gap-2"><RefreshCw size={10} className="animate-spin"/> Modo Automático Ativo</div>}
-                        </div>
-                       
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
-                            <div><label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">Data de Início</label><input type="date" value={filters.startDate} onChange={e => setFilters(p => ({...p, startDate: e.target.value}))} className="w-full p-3 border-2 border-slate-100 rounded-xl bg-slate-50 font-bold text-sm outline-none focus:border-blue-500"/></div>
-                            <div><label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">Data de Fim</label><input type="date" value={filters.endDate} onChange={e => setFilters(p => ({...p, endDate: e.target.value}))} className="w-full p-3 border-2 border-slate-100 rounded-xl bg-slate-50 font-bold text-sm outline-none focus:border-blue-500"/></div>
-                            <div><label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">Status no Bling</label><select value={filters.status} onChange={e => setFilters(p => ({...p, status: e.target.value as any}))} className="w-full p-3 border-2 border-slate-100 rounded-xl bg-slate-50 font-bold text-sm outline-none focus:border-blue-500"><option value="EM ABERTO">Em Aberto</option><option value="EM ANDAMENTO">Em Andamento</option><option value="ATENDIDO">Atendido</option><option value="TODOS">Todos</option></select></div>
-                        </div>
-                        <button onClick={handleSyncForProduction} disabled={isSyncing} className="w-full mt-8 flex items-center justify-center gap-3 py-5 bg-blue-600 text-white font-black uppercase text-sm tracking-widest rounded-2xl hover:bg-blue-700 disabled:opacity-50 transition-all shadow-xl shadow-blue-100 active:scale-95">{isSyncing ? <Loader2 className="animate-spin" /> : <Download />} {isSyncing ? 'Sincronizando...' : 'Buscar Manualmente'}</button>
-                    </div>
-                    
-                    {/* New Phase 1 Sync Component */}
-                    {settings && (
-                        <BlingSync 
-                            token={settings.apiKey || ''} 
-                            isAuthenticated={!!settings.apiKey}
-                            onSyncStateChange={(isSyncing) => {
-                                // Can be used to disable other buttons during sync
-                            }}
-                            onOrdersSynced={async (rawOrders) => {
-                                if (rawOrders.length === 0) return;
-                                // Salva os pedidos completos (com itens aninhados) para aba Pedidos
-                                setSyncedOrders(rawOrders);
-                                // Importa para produção (cada item separado)
-                                const orderItems = rawOrders.map(transformSyncedOrder);
-                                await onLaunchSuccess(orderItems);
-                                addToast(`✅ ${rawOrders.length} pedido(s) sincronizados (${orderItems.length} item(ns) importados para produção)!`, 'success');
-                            }}
-                            onInvoicesSynced={(invoices) => {
-                                if (invoices.length > 0)
-                                    addToast(`📄 ${invoices.length} nota(s) fiscal(is) sincronizada(s)`, 'info');
-                            }}
-                            onProductsSynced={(products) => {
-                                if (products.length > 0)
-                                    addToast(`📦 ${products.length} produto(s) sincronizado(s) do Bling`, 'info');
-                            }}
-                            onStockSynced={(items) => {
-                                if (items.length > 0) {
-                                    setStockItems(items);
-                                    addToast(`📊 Estoque de ${items.length} produto(s) atualizado(s) do Bling`, 'success');
-                                }
-                            }}
-                        />
-                    )}
-                </div>
-            )}
-            
-            {/* Content: Pedidos (completos do Bling, com itens aninhados) */}
-            {activeTab === 'pedidos' && (
-                <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-xl animate-in fade-in slide-in-from-bottom-4">
-                    {/* Mini-banner lotes ZPL */}
-                    {(lastCompletedLote || zplLotes.length > 0) && (
-                        <div className="mb-5">
-                            {lastCompletedLote ? (
-                                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-3">
-                                    <span className="text-xs font-black text-emerald-700">✅ Lote {lastCompletedLote.id} — {lastCompletedLote.success} etiqueta(s){lastCompletedLote.failed.length > 0 ? `, ${lastCompletedLote.failed.length} falha(s)` : ''}</span>
-                                    <div className="flex items-center gap-2">
-                                        <button onClick={() => setZplModeModal({ zpl: lastCompletedLote.zplContent, loteId: lastCompletedLote.id })} className="flex items-center gap-1 text-[10px] font-black uppercase px-3 py-1.5 rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition-all"><Printer size={11}/> Imprimir</button>
-                                        <button onClick={() => setActiveTab('notas')} className="text-[10px] font-black text-blue-600 hover:underline px-2 py-1.5">Ver Lotes →</button>
-                                        <button onClick={() => setLastCompletedLote(null)} className="text-emerald-400 hover:text-emerald-600"><X size={14}/></button>
-                                    </div>
-                                </div>
-                            ) : (
-                                <div className="bg-blue-50 border border-blue-200 rounded-2xl px-4 py-2.5 flex items-center justify-between">
-                                    <span className="text-[11px] font-black text-blue-700"><Printer size={12} className="inline mr-1"/>{zplLotes.length} lote(s) ZPL gerado(s)</span>
-                                    <button onClick={() => setActiveTab('notas')} className="text-[10px] font-black text-blue-600 hover:underline">Abrir Emissão/ZPL →</button>
-                                </div>
-                            )}
-                        </div>
-                    )}
-                    <div className="flex justify-between items-start mb-6 flex-wrap gap-4">
-                        <h2 className="text-xl font-black text-slate-800 uppercase tracking-tighter flex items-center gap-2"><ShoppingCart className="text-blue-500"/> Pedidos de Venda</h2>
-                        <div className="flex items-center gap-2">
-                            {syncedOrders.length > 0 && <span className="text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1 rounded-full">{syncedOrders.length} pedidos</span>}
-                            <button onClick={() => window.alert('Use o botão "Sincronizar Tudo" ou os botões de Sincronização na aba Sincronização para puxar pedidos do Bling.')} className="text-[10px] font-black uppercase tracking-widest text-blue-600 bg-blue-50 px-3 py-2 rounded-xl hover:bg-blue-100 border border-blue-100 flex items-center gap-1"><HelpCircle size={12}/> Como sincronizar?</button>
-                        </div>
-                    </div>
-
-                    {syncedOrders.length === 0 ? (
-                        <div className="text-center py-20 text-slate-400">
-                            <ShoppingCart size={48} className="mx-auto mb-4 opacity-20"/>
-                            <p className="font-bold text-sm">Nenhum pedido sincronizado ainda.</p>
-                            <p className="text-xs mt-1">Vá para a aba <strong>Sincronização</strong> e clique em <strong>Sincronizar Pedidos</strong>.</p>
-                        </div>
-                    ) : (
-                        <div className="space-y-4">
-                            <div className="relative">
-                                <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"/>
-                                <input type="text" value={pedidoSearch} onChange={e => setPedidoSearch(e.target.value)} placeholder="Buscar por número, cliente ou SKU..." className="w-full pl-11 p-3 border-2 border-slate-100 rounded-xl bg-slate-50 font-bold text-sm outline-none focus:border-blue-500"/>
-                            </div>
-                            <div className="overflow-hidden border border-slate-200 rounded-2xl">
-                                <table className="min-w-full text-sm">
-                                    <thead className="bg-slate-900 text-white"><tr>{['', 'Nº Pedido', 'Bling ID', 'Cliente', 'Data', 'Itens', 'Total', 'Status', 'ERP', 'Ações'].map(h => <th key={h} className="p-3 text-left text-[9px] font-black uppercase tracking-widest">{h}</th>)}</tr></thead>
-                                    <tbody className="divide-y divide-slate-100">
-                                        {syncedOrders
-                                            .filter(o => {
-                                                if (!pedidoSearch) return true;
-                                                const s = pedidoSearch.toLowerCase();
-                                                return (o.orderId || '').toLowerCase().includes(s) ||
-                                                    (o.blingNumero || '').toLowerCase().includes(s) ||
-                                                    (o.customer_name || '').toLowerCase().includes(s) ||
-                                                    (o.itens || []).some((it: any) => (it.sku || '').toLowerCase().includes(s));
-                                            })
-                                            .map(order => {
-                                                const isExpanded = expandedOrderIds.has(order.blingId || order.orderId);
-                                                const key = order.blingId || order.orderId || order.id;
-                                                const toggleExpand = () => setExpandedOrderIds(prev => {
-                                                    const next = new Set(prev);
-                                                    isExpanded ? next.delete(key) : next.add(key);
-                                                    return next;
-                                                });
-                                                return (
-                                                    <React.Fragment key={key}>
-                                                        <tr className={`transition-colors cursor-pointer ${isExpanded ? 'bg-blue-50' : 'hover:bg-slate-50'}`} onClick={toggleExpand}>
-                                                            <td className="p-3 text-center">{(order.itens?.length || 0) > 0 ? (isExpanded ? <ChevronDown size={14} className="text-blue-600"/> : <ChevronRight size={14} className="text-slate-400"/>) : <span className="w-3 inline-block"/>}</td>
-                                                            <td className="p-3 font-black text-slate-700">{order.orderId || order.blingNumero || '-'}</td>
-                                                            <td className="p-3 font-mono text-xs text-gray-400">{order.blingId || '-'}</td>
-                                                            <td className="p-3 font-bold text-slate-600 max-w-[160px] truncate">{order.customer_name || 'Não informado'}</td>
-                                                            <td className="p-3 text-slate-500 whitespace-nowrap">{order.data || '-'}</td>
-                                                            <td className="p-3 text-center"><span className="bg-blue-100 text-blue-700 text-[9px] font-black px-2 py-1 rounded-full">{order.itens?.length || order.itensCount || 0} itens</span></td>
-                                                            <td className="p-3 font-black text-emerald-600 whitespace-nowrap">{Number(order.total || 0).toLocaleString('pt-BR', {style:'currency',currency:'BRL'})}</td>
-                                                            <td className="p-3"><span className="text-[9px] font-black px-2 py-1 rounded-full bg-slate-100 text-slate-600 uppercase">{order.status || '-'}</span></td>
-                                                            <td className="p-3">
-                                                                <span className="text-[9px] font-black px-2 py-1 rounded-full whitespace-nowrap bg-emerald-100 text-emerald-700">✅ ERP</span>
-                                                            </td>
-                                                            <td className="p-3">
-                                                                <div className="flex flex-col gap-1">
-                                                                    {!order.invoice && (
-                                                                        <>
-                                                                            <button onClick={e => { e.stopPropagation(); handleGerarNFeDoPedido(order.orderId || order.blingNumero, order, false); }} disabled={gerandoNFeId === (order.orderId || order.blingNumero)} title="Criar NF-e no Bling sem emitir" className="flex items-center gap-1 text-[9px] font-black uppercase bg-emerald-50 text-emerald-700 px-2 py-1 rounded-lg hover:bg-emerald-100 border border-emerald-100 disabled:opacity-50 whitespace-nowrap">
-                                                                                {gerandoNFeId === (order.orderId || order.blingNumero) ? <Loader2 size={10} className="animate-spin"/> : <FileText size={10}/>} Gerar NF-e
-                                                                            </button>
-                                                                            <button onClick={e => { e.stopPropagation(); handleGerarNFeDoPedido(order.orderId || order.blingNumero, order, true); }} disabled={gerandoNFeId === (order.orderId || order.blingNumero)} title="Criar NF-e e emitir ao SEFAZ via Bling" className="flex items-center gap-1 text-[9px] font-black uppercase bg-indigo-50 text-indigo-700 px-2 py-1 rounded-lg hover:bg-indigo-100 border border-indigo-100 disabled:opacity-50 whitespace-nowrap">
-                                                                                {gerandoNFeId === (order.orderId || order.blingNumero) ? <Loader2 size={10} className="animate-spin"/> : <Send size={10}/>} Gerar+Emitir
-                                                                            </button>
-                                                                        </>
-                                                                    )}
-                                                                    {order.invoice?.idPedidoVenda && canGerarEtiquetas && (
-                                                                        <button
-                                                                            onClick={async e => {
-                                                                                e.stopPropagation();
-                                                                                const key = order.blingId || order.orderId;
-                                                                                setGeneratingZplId(key);
-                                                                                try {
-                                                                                    const token = await getValidToken();
-                                                                                    if (!token) throw new Error('Token inválido');
-                                                                                    const zpl = await fetchEtiquetaZplForPedido(token, order.invoice!.idPedidoVenda!);
-                                                                                    if (zpl) setZplModeModal({ zpl, loteId: `ZPL-PD-${key}`, descricao: order.customer_name });
-                                                                                } catch (e: any) { addToast(`Erro ZPL: ${e.message}`, 'error'); }
-                                                                                finally { setGeneratingZplId(null); }
-                                                                            }}
-                                                                            disabled={generatingZplId === (order.blingId || order.orderId)}
-                                                                            className="flex items-center gap-1 text-[9px] font-black uppercase bg-blue-50 text-blue-600 px-2 py-1 rounded-lg hover:bg-blue-100 border border-blue-100 disabled:opacity-50 whitespace-nowrap"
-                                                                        >
-                                                                            {generatingZplId === (order.blingId || order.orderId) ? <Loader2 size={10} className="animate-spin"/> : <Printer size={10}/>} ZPL
-                                                                        </button>
-                                                                    )}
-                                                                </div>
-                                                            </td>
-                                                        </tr>
-                                                        {isExpanded && order.itens && order.itens.length > 0 && (
-                                                            <tr className="bg-blue-50/60">
-                                                                <td colSpan={10} className="px-8 py-4">
-                                                                    <p className="text-[9px] font-black text-blue-600 uppercase tracking-widest mb-2">Itens do Pedido</p>
-                                                                    <table className="w-full text-xs">
-                                                                        <thead><tr className="text-[9px] font-black text-slate-400 uppercase">{['SKU','Descrição','Qtd','Vlr Unit.','Subtotal'].map(h=><th key={h} className="text-left pb-1 pr-4">{h}</th>)}</tr></thead>
-                                                                        <tbody className="divide-y divide-blue-100">{order.itens.map((item: any, idx: number) => (
-                                                                            <tr key={idx} className="hover:bg-blue-100/30">
-                                                                                <td className="py-1.5 pr-4 font-mono font-bold text-blue-800">{item.sku || '-'}</td>
-                                                                                <td className="py-1.5 pr-4 text-slate-700 max-w-[240px] truncate">{item.descricao || '-'}</td>
-                                                                                <td className="py-1.5 pr-4 font-black text-center">{item.quantidade ?? '-'}</td>
-                                                                                <td className="py-1.5 pr-4 font-bold text-emerald-700">{Number(item.valorUnitario || 0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}</td>
-                                                                                <td className="py-1.5 font-black text-emerald-800">{Number(item.subtotal || 0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}</td>
-                                                                            </tr>
-                                                                        ))}</tbody>
-                                                                    </table>
-                                                                </td>
-                                                            </tr>
-                                                        )}
-                                                    </React.Fragment>
-                                                );
-                                            })
-                                        }
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            )}
-
-            {/* Content: Pedidos de Vendas - Marketplace (ML / Shopee via Bling) */}
-            {activeTab === 'pedidos_vendas' && (
+            {/* Content: Importação (Pedidos de Vendas do Bling) */}
+            {activeTab === 'importacao' && (
                 <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
                     {/* Mini-banner lotes ZPL */}
                     {(lastCompletedLote || zplLotes.length > 0) && (
@@ -1767,14 +1572,14 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
                                     <span className="text-xs font-black text-emerald-700">✅ Lote {lastCompletedLote.id} — {lastCompletedLote.success} etiqueta(s){lastCompletedLote.failed.length > 0 ? `, ${lastCompletedLote.failed.length} falha(s)` : ''}</span>
                                     <div className="flex items-center gap-2">
                                         <button onClick={() => setZplModeModal({ zpl: lastCompletedLote.zplContent, loteId: lastCompletedLote.id })} className="flex items-center gap-1 text-[10px] font-black uppercase px-3 py-1.5 rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition-all"><Printer size={11}/> Imprimir</button>
-                                        <button onClick={() => setActiveTab('notas')} className="text-[10px] font-black text-blue-600 hover:underline px-2 py-1.5">Ver Lotes →</button>
+                                        <button onClick={() => setActiveTab('etiquetas')} className="text-[10px] font-black text-blue-600 hover:underline px-2 py-1.5">Ver Lotes →</button>
                                         <button onClick={() => setLastCompletedLote(null)} className="text-emerald-400 hover:text-emerald-600"><X size={14}/></button>
                                     </div>
                                 </div>
                             ) : (
                                 <div className="bg-blue-50 border border-blue-200 rounded-2xl px-4 py-2.5 flex items-center justify-between">
                                     <span className="text-[11px] font-black text-blue-700"><Printer size={12} className="inline mr-1"/>{zplLotes.length} lote(s) ZPL gerado(s)</span>
-                                    <button onClick={() => setActiveTab('notas')} className="text-[10px] font-black text-blue-600 hover:underline">Abrir Emissão/ZPL →</button>
+                                    <button onClick={() => setActiveTab('etiquetas')} className="text-[10px] font-black text-blue-600 hover:underline">Abrir Etiquetas →</button>
                                 </div>
                             )}
                         </div>
@@ -1818,9 +1623,9 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
                                     <label className="text-[10px] font-black text-yellow-700 uppercase tracking-widest mb-1 block">Situação</label>
                                     <select value={vendasSituacao} onChange={e => setVendasSituacao(e.target.value)} className="p-2.5 border-2 border-yellow-200 rounded-xl bg-white font-bold text-sm outline-none focus:border-yellow-500">
                                         <option value="6">Em Aberto</option>
-                                        <option value="9">Em Andamento</option>
-                                        <option value="1">Verificado</option>
-                                        <option value="6,9">Em Aberto + Em Andamento</option>
+                                        <option value="9">Atendido</option>
+                                        <option value="15">Em Andamento</option>
+                                        <option value="6,9">Em Aberto + Atendido</option>
                                         <option value="TODOS">Todas as Situações</option>
                                     </select>
                                 </div>
@@ -2085,8 +1890,8 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
                 </div>
             )}
 
-            {/* Content: ZPL */}
-            {activeTab === 'notas' && (
+            {/* Content: NF-e — Notas Fiscais */}
+            {activeTab === 'nfe' && (
                 <div className="flex gap-4 items-start animate-in fade-in slide-in-from-bottom-4">
 
                     {/* Painel principal */}
@@ -2094,21 +1899,19 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
 
                         {/* Cabeçalho */}
                         <div className="flex justify-between items-start mb-6 flex-wrap gap-3">
-                            <h2 className="text-xl font-black text-slate-800 uppercase tracking-tighter flex items-center gap-2">
-                                <Printer className="text-blue-600"/> ZPL — Etiquetas em Lote
-                            </h2>
+                            <div>
+                                <h2 className="text-xl font-black text-slate-800 uppercase tracking-tighter flex items-center gap-2">
+                                    <FileText className="text-emerald-600"/> Notas Fiscais
+                                    {enrichedOrders.length > 0 && <span className="text-sm text-slate-400 font-bold normal-case tracking-normal ml-1">({filteredEnrichedOrders.length})</span>}
+                                </h2>
+                                <p className="text-[11px] text-slate-400 mt-0.5">Gerencie NF-e: envie pendentes, imprima DANFE + etiqueta de transporte.</p>
+                            </div>
                             <div className="flex items-center gap-2">
                                 {settings?.autoSync && (
                                     <div className="text-[10px] font-bold text-purple-600 bg-purple-50 px-3 py-1 rounded-full border border-purple-100 flex items-center gap-2">
                                         <RefreshCw size={10} className="animate-spin"/> Tempo Real
                                     </div>
                                 )}
-                                <button
-                                    onClick={() => setShowLoteSidebar(p => !p)}
-                                    className={`flex items-center gap-2 text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl border transition-all ${showLoteSidebar ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-500 border-slate-200 hover:border-blue-400'}`}
-                                >
-                                    <History size={12}/> Lotes ({zplLotes.length})
-                                </button>
                             </div>
                         </div>
 
@@ -2201,10 +2004,27 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
                                         onChange={e => setFilterNfeStatus(e.target.value as any)}
                                         className="flex-grow p-2 bg-transparent font-bold text-sm text-slate-700 outline-none"
                                     >
-                                        <option value="TODOS">Todas as Situações de Nota</option>
-                                        <option value="EMITIDA">Emitida / Autorizada</option>
-                                        <option value="PENDENTE">Pendente / Em Digitação</option>
+                                        <option value="TODOS">Todas as Situações</option>
+                                        <option value="PENDENTE">Pendentes</option>
+                                        <option value="EMITIDA">Emitidas</option>
+                                        <option value="AUTORIZADA_SEM_DANFE">Autorizadas sem DANFE</option>
                                         <option value="SEM_NOTA">Sem Nota Gerada</option>
+                                    </select>
+                                </div>
+                                <div className="flex items-center gap-2 bg-slate-50 p-1 rounded-xl border border-slate-100">
+                                    <div className="pl-3 pr-2"><ShoppingBag size={18} className="text-slate-400"/></div>
+                                    <select
+                                        value={vendasCanalFilter}
+                                        onChange={e => setVendasCanalFilter(e.target.value as any)}
+                                        className="flex-grow p-2 bg-transparent font-bold text-sm text-slate-700 outline-none"
+                                    >
+                                        <option value="TODOS">Todas as Lojas</option>
+                                        <option value="ML">Mercado Livre</option>
+                                        <option value="SHOPEE">Shopee</option>
+                                        <option value="SITE">Site / Outros</option>
+                                        {blingCanais.filter(c => !['ML','SHOPEE','SITE'].some(k => c.descricao.toUpperCase().includes(k))).map(c => (
+                                            <option key={c.id} value={c.descricao}>{c.descricao}</option>
+                                        ))}
                                     </select>
                                 </div>
                             </div>
@@ -2377,315 +2197,6 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
                     </div>
                     {/* fim painel principal */}
 
-                    {/* Sidebar de Lotes ZPL */}
-                    {showLoteSidebar && (
-                        <div className="w-80 shrink-0 sticky top-4 bg-white rounded-3xl border border-gray-200 shadow-xl p-5 max-h-[80vh] flex flex-col">
-                            <div className="flex items-center justify-between mb-4">
-                                <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight flex items-center gap-2">
-                                    <History size={14} className="text-blue-600"/> Lotes ZPL
-                                </h3>
-                                <button onClick={() => setShowLoteSidebar(false)} className="text-slate-300 hover:text-slate-600 transition-colors">
-                                    <X size={16}/>
-                                </button>
-                            </div>
-                            <div className="flex gap-1.5 mb-4">
-                                {(['todos', 'falhas'] as const).map(f => (
-                                    <button
-                                        key={f}
-                                        onClick={() => setZplLotesFilter(f)}
-                                        className={`flex-1 text-[10px] font-black uppercase tracking-widest py-1.5 rounded-xl transition-all ${zplLotesFilter === f ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
-                                    >
-                                        {f === 'todos' ? 'Todos' : 'Com Falhas'}
-                                    </button>
-                                ))}
-                            </div>
-                            <div className="flex-1 overflow-y-auto space-y-2 custom-scrollbar pr-1">
-                                {zplLotes.length === 0 ? (
-                                    <div className="text-center py-8 text-slate-300">
-                                        <Clock size={32} className="mx-auto mb-2 opacity-50"/>
-                                        <p className="text-xs font-bold">Nenhum lote gerado nesta sessão.</p>
-                                    </div>
-                                ) : (
-                                    (zplLotesFilter === 'falhas' ? zplLotes.filter(l => l.failed.length > 0) : zplLotes).map(lote => (
-                                        <div key={lote.id} className={`rounded-2xl border p-3 space-y-2 ${lote.failed.length > 0 ? 'border-red-200 bg-red-50/50' : 'border-emerald-200 bg-emerald-50/30'}`}>
-                                            <div className="flex items-start justify-between gap-2">
-                                                <div>
-                                                    <p className="text-[10px] font-black text-slate-700 truncate">{lote.id}</p>
-                                                    <p className="text-[9px] text-slate-400 mt-0.5">{new Date(lote.timestamp).toLocaleString('pt-BR', { timeStyle: 'short', dateStyle: 'short' })}</p>
-                                                </div>
-                                                <div className="shrink-0 text-right">
-                                                    <p className="text-[10px] font-black text-slate-700">{lote.total} pedido(s)</p>
-                                                    <p className="text-[9px] font-bold">
-                                                        <span className="text-emerald-600">{lote.success} ok</span>
-                                                        {lote.failed.length > 0 && <span className="text-red-500"> / {lote.failed.length} falha(s)</span>}
-                                                    </p>
-                                                </div>
-                                            </div>
-                                            {lote.failed.length > 0 && (
-                                                <div className="bg-red-100/70 rounded-xl p-2 space-y-1 max-h-24 overflow-y-auto">
-                                                    {lote.failed.map(f => (
-                                                        <p key={f.orderId} className="text-[9px] text-red-700">
-                                                            <span className="font-black">{f.orderId}:</span> {f.error.slice(0, 60)}
-                                                        </p>
-                                                    ))}
-                                                </div>
-                                            )}
-                                            <div className="flex gap-1.5">
-                                                <button onClick={() => setZplModeModal({ zpl: lote.zplContent, loteId: lote.id })} className="flex-1 flex items-center justify-center gap-1 text-[9px] font-black uppercase tracking-widest py-1.5 rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition-all">
-                                                    <Printer size={10}/> Imprimir
-                                                </button>
-                                                <button onClick={() => { onLoadZpl(lote.zplContent); setCurrentPage('etiquetas'); }} className="flex-1 flex items-center justify-center gap-1 text-[9px] font-black uppercase tracking-widest py-1.5 rounded-xl bg-purple-600 text-white hover:bg-purple-700 transition-all">
-                                                    <Printer size={10}/> Etiquetas
-                                                </button>
-                                            </div>
-                                        </div>
-                                    ))
-                                )}
-                            </div>
-                        </div>
-                    )}
-
-                </div>
-            )}
-
-            {/* Content: Estoque */}
-            {activeTab === 'estoque' && (
-                <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
-                    {/* Header */}
-                    <div className="bg-white p-6 rounded-3xl border border-gray-200 shadow-xl">
-                        <div className="flex justify-between items-start mb-5 flex-wrap gap-3">
-                            <div>
-                                <h2 className="text-xl font-black text-slate-800 uppercase tracking-tighter flex items-center gap-2">
-                                    <TrendingDown className="text-emerald-500"/> Estoque Bling
-                                    {stockItems.length > 0 && <span className="text-sm text-slate-400 font-bold normal-case tracking-normal ml-1">({stockItems.length} produtos)</span>}
-                                </h2>
-                                <p className="text-[11px] text-slate-400 mt-0.5">Saldos físicos e virtuais via <strong>API Bling v3</strong> — todos os depósitos consolidados.</p>
-                            </div>
-                            <button onClick={handleFetchStock} disabled={isLoadingStock} className="flex items-center gap-2 px-6 py-3 bg-emerald-600 text-white font-black uppercase text-xs tracking-widest rounded-2xl hover:bg-emerald-700 disabled:opacity-50 transition-all shadow-lg shadow-emerald-100 active:scale-95">
-                                {isLoadingStock ? <Loader2 className="animate-spin" size={16}/> : <RefreshCw size={16}/>}
-                                {isLoadingStock ? 'Buscando...' : 'Atualizar Estoque'}
-                            </button>
-                        </div>
-
-                        {/* Filtros e busca */}
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                            <div className="relative md:col-span-2">
-                                <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
-                                <input type="text" value={stockSearch} onChange={e => setStockSearch(e.target.value)} placeholder="SKU ou descrição..." className="w-full pl-9 p-3 border-2 border-slate-100 rounded-xl bg-slate-50 font-bold text-sm outline-none focus:border-emerald-500"/>
-                            </div>
-                            <select value={stockFilter} onChange={e => setStockFilter(e.target.value as any)} className="p-3 border-2 border-slate-100 rounded-xl bg-slate-50 font-bold text-sm outline-none focus:border-emerald-500">
-                                <option value="todos">Todos</option>
-                                <option value="zerado">Zerado / Negativo</option>
-                                <option value="baixo">Baixo (1–5)</option>
-                                <option value="ok">OK (&gt;5)</option>
-                            </select>
-                            <select value={stockSort} onChange={e => setStockSort(e.target.value as any)} className="p-3 border-2 border-slate-100 rounded-xl bg-slate-50 font-bold text-sm outline-none focus:border-emerald-500">
-                                <option value="sku">Ordenar: SKU</option>
-                                <option value="nome">Ordenar: Nome</option>
-                                <option value="fisico_asc">Estoque: Menor→Maior</option>
-                                <option value="fisico_desc">Estoque: Maior→Menor</option>
-                            </select>
-                        </div>
-
-                        {/* Pills de resumo */}
-                        {stockItems.length > 0 && (() => {
-                            const zerado     = stockItems.filter(i => (i.saldoFisico ?? i.estoqueReal ?? 0) <= 0).length;
-                            const baixo      = stockItems.filter(i => { const s = i.saldoFisico ?? i.estoqueReal ?? 0; return s > 0 && s <= 5; }).length;
-                            const ok         = stockItems.filter(i => (i.saldoFisico ?? i.estoqueReal ?? 0) > 5).length;
-                            const divergente = stockItems.filter(i => {
-                                const sku = (i.codigo || '').toUpperCase();
-                                if (!erpStockMap.has(sku)) return false;
-                                return Math.abs((i.saldoFisico ?? i.estoqueReal ?? 0) - (erpStockMap.get(sku) ?? 0)) > 0;
-                            }).length;
-                            return (
-                                <div className="flex gap-2 mt-4 flex-wrap">
-                                    <button onClick={() => setStockFilter('todos')} className={`text-[10px] font-black px-3 py-1.5 rounded-full border transition-all ${stockFilter==='todos' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-400'}`}>
-                                        Todos — {stockItems.length}
-                                    </button>
-                                    <button onClick={() => setStockFilter('zerado')} className={`text-[10px] font-black px-3 py-1.5 rounded-full border transition-all ${stockFilter==='zerado' ? 'bg-red-600 text-white border-red-600' : 'bg-red-50 border-red-200 text-red-600 hover:bg-red-100'}`}>
-                                        🔴 Zerado/Negativo — {zerado}
-                                    </button>
-                                    <button onClick={() => setStockFilter('baixo')} className={`text-[10px] font-black px-3 py-1.5 rounded-full border transition-all ${stockFilter==='baixo' ? 'bg-orange-600 text-white border-orange-600' : 'bg-orange-50 border-orange-200 text-orange-600 hover:bg-orange-100'}`}>
-                                        🟡 Baixo (1–5) — {baixo}
-                                    </button>
-                                    <button onClick={() => setStockFilter('ok')} className={`text-[10px] font-black px-3 py-1.5 rounded-full border transition-all ${stockFilter==='ok' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100'}`}>
-                                        🟢 OK (&gt;5) — {ok}
-                                    </button>
-                                    {erpStockMap.size > 0 && (
-                                        <button onClick={() => setStockFilter('divergente')} className={`text-[10px] font-black px-3 py-1.5 rounded-full border transition-all ${stockFilter==='divergente' ? 'bg-violet-600 text-white border-violet-600' : 'bg-violet-50 border-violet-200 text-violet-600 hover:bg-violet-100'}`}>
-                                            ⚠️ Divergente Bling↔ERP — {divergente}
-                                        </button>
-                                    )}
-                                </div>
-                            );
-                        })()}
-                    </div>
-
-                    {/* Tabela */}
-                    {stockItems.length === 0 && !isLoadingStock ? (
-                        <div className="bg-white rounded-3xl border border-gray-200 shadow-xl p-16 text-center text-slate-400">
-                            <TrendingDown size={48} className="mx-auto mb-4 opacity-20"/>
-                            <p className="font-bold text-sm">Nenhum dado de estoque carregado.</p>
-                            <p className="text-xs mt-1">Clique em <strong>Atualizar Estoque</strong> para buscar os dados do Bling.</p>
-                        </div>
-                    ) : isLoadingStock ? (
-                        <div className="bg-white rounded-3xl border border-gray-200 shadow-xl p-16 text-center text-slate-400">
-                            <Loader2 size={40} className="mx-auto mb-4 animate-spin text-emerald-500"/>
-                            <p className="font-bold text-sm">Buscando produtos e saldos no Bling…</p>
-                            <p className="text-xs mt-1 text-slate-300">Isso pode levar alguns segundos dependendo do catálogo.</p>
-                        </div>
-                    ) : (() => {
-                        const filteredStock = stockItems
-                            .filter(item => {
-                                const s = stockSearch.toLowerCase();
-                                const matchSearch = !stockSearch ||
-                                    (item.codigo || '').toLowerCase().includes(s) ||
-                                    (item.descricao || '').toLowerCase().includes(s);
-                                const saldo = item.saldoFisico ?? item.estoqueReal ?? 0;
-                                const sku   = (item.codigo || '').toUpperCase();
-                                const erpQty = erpStockMap.get(sku);
-                                const matchFilter =
-                                    stockFilter === 'todos'      ? true :
-                                    stockFilter === 'zerado'     ? saldo <= 0 :
-                                    stockFilter === 'baixo'      ? (saldo > 0 && saldo <= 5) :
-                                    stockFilter === 'divergente' ? (erpQty !== undefined && Math.abs(saldo - erpQty) > 0) :
-                                    saldo > 5;
-                                return matchSearch && matchFilter;
-                            })
-                            .sort((a, b) => {
-                                if (stockSort === 'sku')         return (a.codigo || '').localeCompare(b.codigo || '');
-                                if (stockSort === 'nome')        return (a.descricao || '').localeCompare(b.descricao || '');
-                                const sa = a.saldoFisico ?? a.estoqueReal ?? 0;
-                                const sb = b.saldoFisico ?? b.estoqueReal ?? 0;
-                                return stockSort === 'fisico_asc' ? sa - sb : sb - sa;
-                            });
-
-                        return (
-                            <div className="bg-white rounded-3xl border border-gray-200 shadow-xl overflow-hidden">
-                                <div className="overflow-x-auto max-h-[65vh] custom-scrollbar">
-                                    <table className="min-w-full text-sm">
-                                        <thead className="bg-slate-900 text-white sticky top-0 z-10">
-                                            <tr>{['SKU', 'Descrição', 'Bling Físico', 'Bling Virtual', 'ERP Interno', 'Divergência', 'Preço', 'Ajustar'].map(h =>
-                                                <th key={h} className="p-3.5 text-left text-[9px] font-black uppercase tracking-widest">{h}</th>
-                                            )}</tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-100">
-                                            {filteredStock.map((item, i) => {
-                                                const saldo  = item.saldoFisico ?? item.estoqueReal ?? 0;
-                                                const saldoV = item.saldoVirtual ?? item.estoqueVirtual ?? 0;
-                                                const sku    = (item.codigo || '').toUpperCase();
-                                                const erpQty = erpStockMap.get(sku);
-                                                const diff   = erpQty !== undefined ? saldo - erpQty : null;
-                                                const cor  = saldo <= 0 ? 'text-red-600 bg-red-50' : saldo <= 5 ? 'text-orange-600 bg-orange-50' : 'text-emerald-700 bg-emerald-50';
-                                                const dot  = saldo <= 0 ? '🔴' : saldo <= 5 ? '🟡' : '🟢';
-                                                const erpCor = erpQty === undefined
-                                                    ? ''
-                                                    : diff === 0
-                                                        ? 'bg-emerald-50 text-emerald-700'
-                                                        : 'bg-red-50 text-red-600';
-                                                const rowHighlight = diff !== null && diff !== 0 ? 'bg-violet-50/40' : '';
-                                                return (
-                                                    <tr key={item.id || i} className={`hover:bg-slate-50 transition-colors ${rowHighlight}`}>
-                                                        <td className="p-3.5 font-mono font-black text-slate-700 text-xs">{item.codigo || '-'}</td>
-                                                        <td className="p-3.5 font-bold text-slate-600 max-w-[280px] truncate">{item.descricao || '-'}</td>
-                                                        <td className="p-3.5 text-center">
-                                                            <span className={`text-xs font-black px-2.5 py-1 rounded-full ${cor}`}>{dot} {saldo}</span>
-                                                        </td>
-                                                        <td className="p-3.5 font-black text-center text-purple-600 text-xs">{saldoV}</td>
-                                                        <td className="p-3.5 text-center">
-                                                            {erpQty !== undefined ? (
-                                                                <span className={`text-xs font-black px-2.5 py-1 rounded-full ${erpCor}`}>{erpQty}</span>
-                                                            ) : (
-                                                                <span className="text-xs text-slate-300 font-bold">—</span>
-                                                            )}
-                                                        </td>
-                                                        <td className="p-3.5 text-center">
-                                                            {diff === null ? (
-                                                                <span className="text-xs text-slate-300 font-bold">—</span>
-                                                            ) : diff === 0 ? (
-                                                                <span className="text-[10px] font-black px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">✓ OK</span>
-                                                            ) : (
-                                                                <span className="text-[10px] font-black px-2 py-1 rounded-full bg-red-100 text-red-600">{diff > 0 ? `+${diff}` : diff}</span>
-                                                            )}
-                                                        </td>
-                                                        <td className="p-3.5 font-black text-emerald-600 whitespace-nowrap text-xs">
-                                                            {item.preco != null ? Number(item.preco).toLocaleString('pt-BR', {style:'currency', currency:'BRL'}) : '-'}
-                                                        </td>
-                                                        <td className="p-3.5">
-                                                            <button
-                                                                onClick={() => { setAdjustStockModal({ item }); setAdjustQty(String(saldo)); setAdjustOp('B'); setAdjustObs(''); }}
-                                                                className="flex items-center gap-1 text-[9px] font-black uppercase px-2.5 py-1.5 rounded-lg bg-slate-100 text-slate-600 hover:bg-emerald-100 hover:text-emerald-700 border border-slate-200 hover:border-emerald-200 transition-all whitespace-nowrap"
-                                                            >
-                                                                <TrendingDown size={10}/> Ajustar
-                                                            </button>
-                                                        </td>
-                                                    </tr>
-                                                );
-                                            })}
-                                            {filteredStock.length === 0 && (
-                                                <tr><td colSpan={8} className="p-10 text-center text-slate-300 font-bold text-sm">Nenhum produto encontrado para este filtro.</td></tr>
-                                            )}
-                                        </tbody>
-                                    </table>
-                                </div>
-                                <div className="px-4 py-2.5 border-t border-slate-100 bg-slate-50">
-                                    <p className="text-[10px] text-slate-400 font-bold">{filteredStock.length} de {stockItems.length} produto(s)</p>
-                                </div>
-                            </div>
-                        );
-                    })()}
-
-                    {/* Modal de ajuste de estoque */}
-                    {adjustStockModal && (
-                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-                            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-7 animate-in zoom-in-95 duration-200">
-                                <div className="flex items-start justify-between mb-5">
-                                    <div>
-                                        <h3 className="text-base font-black text-slate-800 uppercase tracking-tight">Ajustar Estoque</h3>
-                                        <p className="text-xs text-slate-400 mt-0.5 font-bold">{adjustStockModal.item.codigo} — {adjustStockModal.item.descricao}</p>
-                                    </div>
-                                    <button onClick={() => setAdjustStockModal(null)} className="text-slate-400 hover:text-slate-700"><X size={20}/></button>
-                                </div>
-
-                                <div className="space-y-4">
-                                    <div>
-                                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5 block">Operação</label>
-                                        <div className="grid grid-cols-3 gap-2">
-                                            {([['B', 'Balanço', 'bg-blue-600'], ['E', 'Entrada', 'bg-emerald-600'], ['S', 'Saída', 'bg-red-500']] as const).map(([op, label, cls]) => (
-                                                <button key={op} onClick={() => setAdjustOp(op)}
-                                                    className={`py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${adjustOp === op ? cls + ' text-white shadow-lg' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
-                                                    {label}
-                                                </button>
-                                            ))}
-                                        </div>
-                                        <p className="text-[10px] text-slate-400 mt-1.5">
-                                            {adjustOp === 'B' ? '🔵 Balanço: define o saldo exato (substitui o valor atual).' :
-                                             adjustOp === 'E' ? '🟢 Entrada: soma a quantidade ao saldo atual.' :
-                                                               '🔴 Saída: subtrai a quantidade do saldo atual.'}
-                                        </p>
-                                    </div>
-                                    <div>
-                                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5 block">Quantidade</label>
-                                        <input type="number" min="0" step="1" value={adjustQty} onChange={e => setAdjustQty(e.target.value)}
-                                            className="w-full p-3 border-2 border-slate-200 rounded-xl font-black text-lg outline-none focus:border-emerald-500 text-center"/>
-                                    </div>
-                                    <div>
-                                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5 block">Observações (opcional)</label>
-                                        <input type="text" value={adjustObs} onChange={e => setAdjustObs(e.target.value)} placeholder="Ex: Inventário Fev/2026…"
-                                            className="w-full p-3 border-2 border-slate-200 rounded-xl font-bold text-sm outline-none focus:border-emerald-500"/>
-                                    </div>
-                                </div>
-
-                                <div className="flex gap-3 mt-6">
-                                    <button onClick={() => setAdjustStockModal(null)} className="flex-1 py-3 rounded-2xl bg-slate-100 text-slate-600 font-black text-xs uppercase tracking-widest hover:bg-slate-200 transition-all">Cancelar</button>
-                                    <button onClick={handleAdjustStock} disabled={isSavingAdjust || !adjustQty}
-                                        className="flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl bg-emerald-600 text-white font-black text-xs uppercase tracking-widest hover:bg-emerald-700 disabled:opacity-50 transition-all shadow-lg shadow-emerald-100">
-                                        {isSavingAdjust ? <Loader2 size={14} className="animate-spin"/> : <TrendingDown size={14}/>} Salvar no Bling
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
                 </div>
             )}
 
@@ -2731,9 +2242,141 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
                 </div>
             )}
 
-            {/* Content: NFe & SEFAZ */}
-            {activeTab === 'nfe' && (
-                <NFeManager isAuthenticated={true} blingToken={settings?.apiKey} orders={erpAllOrders as any} addToast={addToast} />
+            {/* Content: Etiquetas ZPL */}
+            {activeTab === 'etiquetas' && (
+                <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
+                    {/* Header */}
+                    <div className="bg-white p-6 rounded-3xl border border-gray-200 shadow-xl">
+                        <div className="flex justify-between items-start mb-4 flex-wrap gap-3">
+                            <div>
+                                <h2 className="text-xl font-black text-slate-800 uppercase tracking-tighter flex items-center gap-2">
+                                    <Printer className="text-blue-600"/> Etiquetas ZPL
+                                    {zplLotes.length > 0 && <span className="text-sm text-slate-400 font-bold normal-case tracking-normal ml-1">({zplLotes.length} lote(s))</span>}
+                                </h2>
+                                <p className="text-[11px] text-slate-400 mt-0.5">Lotes de etiquetas ZPL gerados nesta sessão. Imprima DANFE simplificado + etiqueta de transporte.</p>
+                            </div>
+                            <div className="flex gap-1.5">
+                                {(['todos', 'falhas'] as const).map(f => (
+                                    <button
+                                        key={f}
+                                        onClick={() => setZplLotesFilter(f)}
+                                        className={`text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-xl transition-all ${zplLotesFilter === f ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                                    >
+                                        {f === 'todos' ? 'Todos' : 'Com Falhas'}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Progress bar */}
+                    {isBatchZplNotas && batchZplNotasProgress && (
+                        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-xs font-black text-blue-700 flex items-center gap-2">
+                                    <Loader2 size={12} className="animate-spin"/> Gerando etiquetas ZPL em lote...
+                                </span>
+                                <span className="text-xs font-bold text-blue-600">{batchZplNotasProgress.current} / {batchZplNotasProgress.total}</span>
+                            </div>
+                            <div className="w-full bg-blue-200 rounded-full h-2.5 overflow-hidden">
+                                <div className="bg-blue-600 h-2.5 rounded-full transition-all duration-300" style={{ width: `${Math.round((batchZplNotasProgress.current / batchZplNotasProgress.total) * 100)}%` }} />
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Último lote banner */}
+                    {lastCompletedLote && (
+                        <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-5 flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                                <p className="text-sm font-black text-emerald-700">
+                                    Lote {lastCompletedLote.id} — {lastCompletedLote.success} gerada(s){lastCompletedLote.failed.length > 0 ? `, ${lastCompletedLote.failed.length} falha(s)` : ''}
+                                </p>
+                                <p className="text-[10px] text-emerald-600 mt-0.5">{new Date(lastCompletedLote.timestamp).toLocaleString('pt-BR')}</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => { onLoadZpl(lastCompletedLote.zplContent, true); }}
+                                    className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest px-4 py-2.5 rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition-all"
+                                >
+                                    <FileText size={12}/> DANFE + Etiqueta
+                                </button>
+                                <button
+                                    onClick={() => { onLoadZpl(lastCompletedLote.zplContent, false); }}
+                                    className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest px-4 py-2.5 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 transition-all"
+                                >
+                                    <Printer size={12}/> Apenas Etiqueta
+                                </button>
+                                <button
+                                    onClick={() => { onLoadZpl(lastCompletedLote.zplContent); setCurrentPage('etiquetas'); }}
+                                    className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest px-4 py-2.5 rounded-xl bg-purple-600 text-white hover:bg-purple-700 transition-all"
+                                >
+                                    <Printer size={12}/> Ir p/ Etiquetas
+                                </button>
+                                <button onClick={() => setLastCompletedLote(null)} className="text-emerald-400 hover:text-emerald-600 p-1">
+                                    <X size={14}/>
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Lista de Lotes */}
+                    {zplLotes.length === 0 ? (
+                        <div className="bg-white rounded-3xl border border-gray-200 shadow-xl p-16 text-center text-slate-400">
+                            <Printer size={48} className="mx-auto mb-4 opacity-20"/>
+                            <p className="font-bold text-sm">Nenhuma etiqueta gerada ainda nesta sessão.</p>
+                            <p className="text-xs mt-1">Vá para a aba <strong className="text-emerald-600">NF-e</strong> e gere ZPL a partir de notas emitidas, ou use a aba <strong className="text-yellow-600">Importação</strong> para gerar ZPL dos pedidos.</p>
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {(zplLotesFilter === 'falhas' ? zplLotes.filter(l => l.failed.length > 0) : zplLotes).map(lote => (
+                                <div key={lote.id} className={`bg-white rounded-2xl border shadow-sm p-5 space-y-3 ${lote.failed.length > 0 ? 'border-red-200' : 'border-emerald-200'}`}>
+                                    <div className="flex items-start justify-between gap-2">
+                                        <div>
+                                            <p className="text-xs font-black text-slate-700 truncate max-w-[200px]">{lote.id}</p>
+                                            <p className="text-[9px] text-slate-400 mt-0.5">{new Date(lote.timestamp).toLocaleString('pt-BR', { timeStyle: 'short', dateStyle: 'short' })}</p>
+                                        </div>
+                                        <div className="shrink-0 text-right">
+                                            <p className="text-xs font-black text-slate-700">{lote.total} pedido(s)</p>
+                                            <p className="text-[9px] font-bold">
+                                                <span className="text-emerald-600">{lote.success} ok</span>
+                                                {lote.failed.length > 0 && <span className="text-red-500 ml-1">{lote.failed.length} falha(s)</span>}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    {lote.failed.length > 0 && (
+                                        <div className="bg-red-50 rounded-xl p-2 space-y-1 max-h-20 overflow-y-auto border border-red-100">
+                                            {lote.failed.map(f => (
+                                                <p key={f.orderId} className="text-[9px] text-red-700">
+                                                    <span className="font-black">{f.orderId}:</span> {f.error.slice(0, 80)}
+                                                </p>
+                                            ))}
+                                        </div>
+                                    )}
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={() => setZplModeModal({ zpl: lote.zplContent, loteId: lote.id })}
+                                            className="flex-1 flex items-center justify-center gap-1 text-[9px] font-black uppercase tracking-widest py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition-all"
+                                        >
+                                            <Printer size={10}/> Imprimir
+                                        </button>
+                                        <button
+                                            onClick={() => { onLoadZpl(lote.zplContent); setCurrentPage('etiquetas'); }}
+                                            className="flex-1 flex items-center justify-center gap-1 text-[9px] font-black uppercase tracking-widest py-2 rounded-xl bg-purple-600 text-white hover:bg-purple-700 transition-all"
+                                        >
+                                            <FileOutput size={10}/> Processar
+                                        </button>
+                                        <button
+                                            onClick={() => copyZplBatch(lote.zplContent, lote.id)}
+                                            className="flex items-center justify-center gap-1 text-[9px] font-black uppercase tracking-widest px-3 py-2 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all"
+                                        >
+                                            <Copy size={10}/>
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
             )}
 
             <BlingConfigModal 
