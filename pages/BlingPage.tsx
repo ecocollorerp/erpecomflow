@@ -62,7 +62,7 @@ const getSevenDaysAgo = () => {
     return d.toISOString().split('T')[0];
 };
 
-type Tab = 'sincronizacao' | 'pedidos' | 'pedidos_vendas' | 'notas' | 'estoque' | 'catalogo' | 'nfe';
+type Tab = 'catalogo' | 'nfe';
 
 const DEFAULT_BLING_SCOPE: BlingScopeSettings = {
     importarProdutos: true,
@@ -688,10 +688,7 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
     const canViewProducts = scopeSettings.importarProdutos || !!scopeSettings.produtos;
 
     const getDefaultTab = (): Tab => {
-        if (canImportPedidos) return 'pedidos_vendas';
-        if (canImportNotas) return 'notas';
-        if (canViewProducts) return 'catalogo';
-        return 'pedidos_vendas';
+        return 'nfe';
     };
 
     const [activeTab, setActiveTab] = useState<Tab>(getDefaultTab());
@@ -1555,33 +1552,10 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
                 </div>
             )}
 
-            {/* Tabs — ordem: Marketplace → Pedidos → Emissão/ZPL → Sincronização → Estoque → Catálogo → NFe */}
+            {/* Tabs — Catálogo + Pedidos & Docs */}
             <div className="flex border-b overflow-x-auto">
-                {canImportPedidos && (() => {
-                    const cnt = vendasDirectOrders.length;
-                    return (
-                        <button
-                            onClick={() => setActiveTab('pedidos_vendas')}
-                            className={`flex items-center gap-2 px-6 py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${
-                                activeTab === 'pedidos_vendas' ? 'border-yellow-500 text-yellow-700 bg-yellow-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'
-                            }`}
-                        >
-                            {isLoadingVendas && activeTab === 'pedidos_vendas'
-                                ? <Loader2 size={14} className="animate-spin text-yellow-500"/>
-                                : <ShoppingBag size={16}/>
-                            }
-                            Marketplace
-                            {cnt > 0 && <span className="bg-yellow-500 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full">{cnt}</span>}
-                            {isLoadingVendas && cnt === 0 && <span className="bg-yellow-100 text-yellow-600 text-[9px] font-black px-1.5 py-0.5 rounded-full">...</span>}
-                        </button>
-                    );
-                })()}
-                {canImportPedidos && <button onClick={() => setActiveTab('pedidos')} className={`flex items-center gap-2 px-6 py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'pedidos' ? 'border-blue-600 text-blue-700 bg-blue-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}><ShoppingCart size={16}/> Pedidos {syncedOrders.length > 0 && <span className="bg-blue-600 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full">{syncedOrders.length}</span>}</button>}
-                {canImportNotas && <button onClick={() => setActiveTab('notas')} className={`flex items-center gap-2 px-6 py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'notas' ? 'border-blue-600 text-blue-700 bg-blue-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}><Printer size={16}/> Emissão/ZPL {zplLotes.length > 0 && <span className="bg-blue-600 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full">{zplLotes.length}</span>}</button>}
-                {canImportPedidos && <button onClick={() => setActiveTab('sincronizacao')} className={`flex items-center gap-2 px-6 py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'sincronizacao' ? 'border-blue-600 text-blue-700 bg-blue-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}><Download size={16}/> Sincronização</button>}
-                {scopeSettings.estoque && <button onClick={() => setActiveTab('estoque')} className={`flex items-center gap-2 px-6 py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'estoque' ? 'border-emerald-600 text-emerald-700 bg-emerald-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}><TrendingDown size={16}/> Estoque</button>}
-                {canViewProducts && <button onClick={() => setActiveTab('catalogo')} className={`flex items-center gap-2 px-6 py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'catalogo' ? 'border-purple-600 text-purple-700 bg-purple-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}><Package size={16}/> Catálogo</button>}
                 <button onClick={() => setActiveTab('nfe')} className={`flex items-center gap-2 px-6 py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'nfe' ? 'border-purple-600 text-purple-700 bg-purple-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}><FileText size={16}/> Pedidos & Docs</button>
+                {canViewProducts && <button onClick={() => setActiveTab('catalogo')} className={`flex items-center gap-2 px-6 py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all ${activeTab === 'catalogo' ? 'border-purple-600 text-purple-700 bg-purple-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}><Package size={16}/> Catálogo</button>}
             </div>
 
             {/* Content: Sincronização */}
