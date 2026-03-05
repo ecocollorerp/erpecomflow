@@ -142,6 +142,7 @@ DO $$ BEGIN
 END $$;
 
 ALTER TABLE stock_movements
+    ADD COLUMN IF NOT EXISTS stock_item_code TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS stock_item_name TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS from_weighing   BOOLEAN DEFAULT FALSE,
     ADD COLUMN IF NOT EXISTS product_sku     TEXT,
@@ -334,6 +335,7 @@ DO $$ BEGIN
 END $$;
 
 ALTER TABLE weighing_batches
+    ADD COLUMN IF NOT EXISTS stock_item_code TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS stock_item_name TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS created_by_id   TEXT,
     ADD COLUMN IF NOT EXISTS created_by_name TEXT;
