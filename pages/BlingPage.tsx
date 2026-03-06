@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { GeneralSettings, OrderItem, BlingInvoice, BlingProduct, BlingSettings, BlingScopeSettings, StockItem, SkuLink } from '../types';
-import { fetchBlingOrders, fetchBlingInvoices, fetchEtiquetaZplForPedido, fetchBlingProducts, executeBlingTokenExchange, executeTokenRefresh, syncBlingOrders, syncBlingInvoices } from '../lib/blingApi';
+import { fetchBlingOrders, fetchBlingInvoices, fetchEtiquetaZplForPedido, fetchEtiquetasLote, fetchBlingProducts, executeBlingTokenExchange, executeTokenRefresh, syncBlingOrders, syncBlingInvoices } from '../lib/blingApi';
 import { addPendingZplItem } from '../utils/pendingZpl';
 import { BlingSync } from '../components/BlingSync';
 // NFeManager integrado diretamente no BlingPage
@@ -730,6 +730,9 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
     const [zplLotesFilter, setZplLotesFilter] = useState<'todos' | 'falhas'>('todos');
     const [lastCompletedLote, setLastCompletedLote] = useState<ZplLoteItem | null>(null);
     const [zplGeneratedIds, setZplGeneratedIds] = useState<Set<string>>(new Set());
+    // Puxar etiquetas manualmente do Bling
+    const [etiquetaPullSource, setEtiquetaPullSource] = useState<'importacao' | 'nfe'>('importacao');
+    const [isPullingEtiquetas, setIsPullingEtiquetas] = useState(false);
     // Canais de venda do Bling — carregados uma vez para detecção dinâmica de canal
     const [blingCanais, setBlingCanais] = useState<{ id: number; descricao: string; tipo: string }[]>([]);
     // Modal NF-e — escolha entre Bling ou ERP próprio
@@ -1410,6 +1413,60 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
         }
     };
 
+    // ── Puxar etiquetas manualmente do Bling ─────────────────────────────────
+    const handlePullEtiquetas = async () => {
+        setIsPullingEtiquetas(true);
+        try {
+            const token = await getValidToken();
+            if (!token) throw new Error('Token do Bling expirado. Reconecte.');
+
+            let ids: string[] = [];
+            if (etiquetaPullSource === 'importacao') {
+                // Pega os pedidos selecionados da aba Importação, ou todos se nenhum selecionado
+                if (selectedVendasIds.size > 0) {
+                    ids = Array.from(selectedVendasIds);
+                } else {
+                    ids = filteredVendasOrders.slice(0, 50).map(o => o.blingId || o.orderId).filter(Boolean);
+                }
+            } else {
+                // Pega dos pedidos com NF-e (aba NF-e)
+                ids = filteredEnrichedOrders.slice(0, 50).map(o => o.blingId || o.orderId).filter(Boolean);
+            }
+
+            if (ids.length === 0) {
+                addToast('Nenhum pedido encontrado. Busque pedidos na aba Importação ou NF-e primeiro.', 'warning');
+                return;
+            }
+
+            const result = await fetchEtiquetasLote(token, ids);
+
+            const successZpls = result.results.filter(r => r.success && r.zpl);
+            const failedItems = result.results.filter(r => !r.success);
+
+            if (successZpls.length > 0) {
+                const batchZpl = successZpls.map(r => r.zpl!).join('\n');
+                const loteId = `LOTE-BLING-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+                const newLote: ZplLoteItem = {
+                    id: loteId,
+                    timestamp: new Date().toISOString(),
+                    total: ids.length,
+                    success: successZpls.length,
+                    failed: failedItems.map(f => ({ orderId: String(f.pedidoVendaId), error: f.error || 'Erro desconhecido' })),
+                    zplContent: batchZpl,
+                };
+                setZplLotes(prev => [newLote, ...prev]);
+                setLastCompletedLote(newLote);
+                addToast(`${successZpls.length} etiqueta(s) puxada(s) do Bling.${failedItems.length > 0 ? ` ${failedItems.length} falha(s).` : ''}`, failedItems.length > 0 ? 'info' : 'success');
+            } else {
+                addToast(`Nenhuma etiqueta puxada. ${failedItems.length} falha(s).`, 'error');
+            }
+        } catch (err: any) {
+            addToast(`Erro ao puxar etiquetas: ${err.message}`, 'error');
+        } finally {
+            setIsPullingEtiquetas(false);
+        }
+    };
+
     const toggleSelectVenda = (key: string) => {
         setSelectedVendasIds(prev => {
             const next = new Set(prev);
@@ -1791,23 +1848,13 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
                                                                 : <span className="text-slate-300 text-[9px]">—</span>}
                                                         </td>
                                                         <td className="p-3 font-black text-emerald-600 whitespace-nowrap">{Number(order.total || 0).toLocaleString('pt-BR', {style:'currency',currency:'BRL'})}</td>
-                                                        <td className="p-3">
-                                                            {(() => {
-                                                                const st = (order.status || '').toLowerCase();
-                                                                const color = st.includes('aberto') ? 'bg-yellow-100 text-yellow-800'
-                                                                    : st.includes('atendido') ? 'bg-emerald-100 text-emerald-700'
-                                                                    : st.includes('andamento') ? 'bg-blue-100 text-blue-700'
-                                                                    : st.includes('cancel') ? 'bg-red-100 text-red-600'
-                                                                    : 'bg-slate-100 text-slate-600';
-                                                                return <span className={`text-[9px] font-black px-2 py-1 rounded-full uppercase ${color}`}>{order.status || '-'}</span>;
-                                                            })()}
-                                                        </td>
+                                                        <td className="p-3"><span className="text-[9px] font-black px-2 py-1 rounded-full bg-slate-100 text-slate-600 uppercase">{order.status || '-'}</span></td>
                                                         {/* ERP column */}
                                                         <td className="p-3">
                                                             {erpImportedBlingIds.has(String(order.blingId || '')) || erpImportedBlingIds.has(String(order.orderId || '')) ? (
-                                                                <span className="text-[9px] font-black px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 whitespace-nowrap">✅ Processado ERP</span>
+                                                                <span className="text-[9px] font-black px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 whitespace-nowrap">✅ Importado</span>
                                                             ) : (
-                                                                <span className="text-[9px] font-black px-2 py-1 rounded-full bg-slate-100 text-slate-400 whitespace-nowrap">—</span>
+                                                                <span className="text-[9px] font-black px-2 py-1 rounded-full bg-slate-100 text-slate-400 whitespace-nowrap">Não importado</span>
                                                             )}
                                                         </td>
                                                         {/* NFe column */}
@@ -2314,6 +2361,40 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
                                     </button>
                                 ))}
                             </div>
+                        </div>
+                    </div>
+
+                    {/* Painel: Puxar etiquetas do Bling */}
+                    <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
+                        <p className="text-[10px] font-black text-blue-700 uppercase tracking-widest mb-3 flex items-center gap-2">
+                            <Download size={12}/> Puxar Etiquetas do Bling
+                        </p>
+                        <div className="flex flex-wrap gap-3 items-end">
+                            <div>
+                                <label className="text-[10px] font-black text-blue-700 uppercase tracking-widest mb-1 block">Origem dos Pedidos</label>
+                                <select
+                                    value={etiquetaPullSource}
+                                    onChange={e => setEtiquetaPullSource(e.target.value as any)}
+                                    className="p-2.5 border-2 border-blue-200 rounded-xl bg-white font-bold text-sm outline-none focus:border-blue-500"
+                                >
+                                    <option value="importacao">Importação (Pedidos de Venda)</option>
+                                    <option value="nfe">NF-e (Notas Fiscais)</option>
+                                </select>
+                            </div>
+                            <button
+                                onClick={handlePullEtiquetas}
+                                disabled={isPullingEtiquetas}
+                                className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white text-xs font-black uppercase tracking-widest rounded-xl shadow-lg shadow-blue-200 hover:bg-blue-700 disabled:opacity-50 transition-all active:scale-95"
+                            >
+                                {isPullingEtiquetas ? <Loader2 size={14} className="animate-spin"/> : <Download size={14}/>}
+                                Puxar Etiquetas
+                            </button>
+                            <p className="text-[10px] text-blue-500 self-center">
+                                {etiquetaPullSource === 'importacao'
+                                    ? `${selectedVendasIds.size > 0 ? selectedVendasIds.size + ' selecionado(s)' : filteredVendasOrders.length + ' pedido(s) disponíveis (máx 50)'}`
+                                    : `${filteredEnrichedOrders.length} pedido(s) NF-e disponíveis (máx 50)`
+                                }
+                            </p>
                         </div>
                     </div>
 

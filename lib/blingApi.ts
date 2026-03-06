@@ -261,17 +261,37 @@ export async function fetchEtiquetaZplForPedido(apiKey: string, idPedidoVenda: s
         throw new Error('Pedido inválido para geração de etiqueta.');
     }
 
+    // Chama endpoint server-side que busca dados reais do pedido no Bling
+    try {
+        const resp = await fetch('/api/bling/etiquetas/buscar', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({ pedidoVendaIds: [safePedido] }),
+        });
+        const data = await resp.json();
+        if (data?.results?.[0]?.success && data.results[0].zpl) {
+            return data.results[0].zpl;
+        }
+        // Se falhou, usa fallback
+        console.warn(`[fetchEtiquetaZpl] Falha ao buscar do Bling: ${data?.results?.[0]?.error || 'desconhecido'}`);
+    } catch (e) {
+        console.warn(`[fetchEtiquetaZpl] Erro de rede:`, e);
+    }
+
+    // Fallback: gera ZPL básica com dados mínimos
     const now = new Date();
     const timestamp = now.toLocaleString('pt-BR');
-
-    const fallbackZpl = `^XA
+    return `^XA
 ^PW800
 ^LL1200
 ^CF0,40
 ^FO40,30^FDETIQUETA - PEDIDO ${safePedido}^FS
 ^CF0,26
 ^FO40,90^FDGerada automaticamente (fallback)^FS
-^FO40,130^FDOrigem: Bling / Marketplace^FS
+^FO40,130^FDOrigem: Bling / ERP^FS
 ^FO40,170^FDData: ${timestamp}^FS
 ^FO40,230^GB720,2,2^FS
 ^BY3,3,110
@@ -283,10 +303,32 @@ export async function fetchEtiquetaZplForPedido(apiKey: string, idPedidoVenda: s
 ^FO40,530^FDStatus: Disponivel para processamento^FS
 ^FO40,570^FDSalve no historico apos processar^FS
 ^FO40,630^GB720,2,2^FS
-^FO40,680^FDUso interno / conferência^FS
+^FO40,680^FDUso interno^FS
 ^XZ`;
+}
 
-    return fallbackZpl;
+/**
+ * Busca etiquetas ZPL em lote para múltiplos pedidos de venda
+ */
+export async function fetchEtiquetasLote(apiKey: string, pedidoVendaIds: string[]): Promise<{
+    total: number;
+    ok: number;
+    fail: number;
+    results: Array<{ pedidoVendaId: string; success: boolean; zpl?: string; numero?: string; nomeCliente?: string; error?: string }>;
+}> {
+    const resp = await fetch('/api/bling/etiquetas/buscar', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Authorization: apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({ pedidoVendaIds }),
+    });
+    if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err?.error || `Erro ${resp.status}`);
+    }
+    return resp.json();
 }
 
 export async function fetchBlingProducts(apiKey: string): Promise<BlingProduct[]> {

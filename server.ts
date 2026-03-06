@@ -1840,14 +1840,13 @@ async function startServer() {
         'Content-Type': 'application/json',
         Accept: 'application/json',
       };
+      const readHeaders = { Authorization: token, Accept: 'application/json' };
 
       // ─── Passo 0: Buscar detalhes completos do pedido no Bling ─────────────
-      // O Bling v3 POST /nfe NÃO popula itens/contato/data automaticamente a
-      // partir de pedidoVenda — todos os campos obrigatórios devem ser enviados.
       console.log(`🔍 [NFe] Buscando detalhes do pedido ${blingOrderId} no Bling…`);
       const pedidoResp = await fetch(
         `https://www.bling.com.br/Api/v3/pedidos/vendas/${Number(blingOrderId)}`,
-        { headers: { Authorization: token, Accept: 'application/json' } },
+        { headers: readHeaders },
       );
 
       let pedidoData: any = null;
@@ -1865,43 +1864,77 @@ async function startServer() {
         });
       }
 
+      console.log(`📋 [NFe] Pedido ${blingOrderId}: contato.id=${pedidoData?.contato?.id}, itens=${(pedidoData?.itens||[]).length}, parcelas=${(pedidoData?.parcelas||[]).length}`);
+
+      // ─── Passo 0b: Buscar dados completos do contato (endereço, doc, IE) ───
+      const contatoBling = pedidoData?.contato || {};
+      let contatoCompleto: any = null;
+      if (contatoBling.id) {
+        try {
+          const ctResp = await fetch(
+            `https://www.bling.com.br/Api/v3/contatos/${contatoBling.id}`,
+            { headers: readHeaders },
+          );
+          if (ctResp.ok) {
+            const ctJson = await ctResp.json().catch(() => ({}));
+            contatoCompleto = ctJson?.data || null;
+            console.log(`👤 [NFe] Contato ${contatoBling.id} obtido: ${contatoCompleto?.nome}, doc=${contatoCompleto?.numeroDocumento}`);
+          }
+        } catch (e) {
+          console.warn(`⚠️ [NFe] Falha ao buscar contato ${contatoBling.id}:`, e);
+        }
+      }
+
+      // Mescla dados — contato completo tem prioridade
+      const ct = { ...contatoBling, ...contatoCompleto };
+
       // ─── Montar payload completo da NF-e ───────────────────────────────────
       const now = new Date();
-      // Formato Bling v3: "YYYY-MM-DD HH:MM:SS"
-      const dataOperacao = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+      const pad2 = (n: number) => String(n).padStart(2, '0');
+      const dataOperacao = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`;
+      const dataHoje = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
 
-      const contatoBling = pedidoData?.contato || {};
       const itensBling: any[] = Array.isArray(pedidoData?.itens) ? pedidoData.itens : [];
       const natOp = pedidoData?.naturezaOperacao;
 
-      // Contato — inclui numeroDocumento se disponível
+      // ── Contato ─────────────────────────────────────────────────────────────
       const contatoPayload: any = {};
-      if (contatoBling.id) contatoPayload.id = contatoBling.id;
-      if (contatoBling.nome) contatoPayload.nome = contatoBling.nome;
-      if (contatoBling.tipoPessoa) contatoPayload.tipoPessoa = contatoBling.tipoPessoa;
-      const numDoc = contatoBling.numeroDocumento || contatoBling.cpf || contatoBling.cnpj || '';
-      if (numDoc) contatoPayload.numeroDocumento = numDoc.replace(/\D/g, '');
-      if (contatoBling.email) contatoPayload.email = contatoBling.email;
-      if (contatoBling.telefone) contatoPayload.telefone = contatoBling.telefone;
+      if (ct.id) contatoPayload.id = Number(ct.id);
+      if (ct.nome) contatoPayload.nome = ct.nome;
+      // tipoPessoa: J=Jurídica, F=Física, E=Estrangeiro
+      if (ct.tipoPessoa) contatoPayload.tipoPessoa = ct.tipoPessoa;
+      // Contribuinte (1=Contribuinte ICMS, 2=Isento, 9=Não contribuinte)
+      if (ct.contribuinte != null) contatoPayload.contribuinte = Number(ct.contribuinte);
+      else contatoPayload.contribuinte = 9; // Consumidor final default
 
-      // Endereço de entrega/cobrança
-      const endBling = pedidoData?.enderecoEntrega || pedidoData?.transporte?.enderecoEntrega || null;
-      if (endBling) {
-        contatoPayload.endereco = {
-          geral: {
-            logradouro:  endBling.endereco || endBling.logradouro || '',
-            numero:      endBling.numero || 'S/N',
-            complemento: endBling.complemento || '',
-            bairro:      endBling.bairro || '',
-            cep:         (endBling.cep || '').replace(/\D/g, ''),
-            municipio:   endBling.municipio?.nome || endBling.cidade || '',
-            uf:          endBling.municipio?.uf || endBling.uf || '',
-            pais:        endBling.pais || 'Brasil',
-          },
-        };
-      }
+      const numDoc = ct.numeroDocumento || ct.cpf || ct.cnpj || '';
+      if (numDoc) contatoPayload.numeroDocumento = String(numDoc).replace(/\D/g, '');
 
-      // Itens — mapeia do formato bling de pedido de venda para o formato NF-e
+      // Inscrição estadual
+      const ie = ct.ie || ct.inscricaoEstadual || ct.rg || '';
+      if (ie && ie !== 'ISENTO') contatoPayload.ie = String(ie).replace(/\D/g, '');
+
+      if (ct.email) contatoPayload.email = ct.email;
+      if (ct.telefone || ct.celular || ct.fone) contatoPayload.telefone = ct.telefone || ct.celular || ct.fone;
+
+      // ── Endereço (formato Bling v3 NF-e = campos flat) ─────────────────────
+      // Prioridade: contato completo > enderecoEntrega do pedido > transporte
+      const endContato = ct.endereco || {};
+      const endEntrega = pedidoData?.enderecoEntrega || pedidoData?.transporte?.enderecoEntrega || {};
+      const end = endContato.geral || endContato; // contato pode ter {geral:{...}}
+      const endFinal = {
+        endereco:    end.endereco || end.logradouro || endEntrega.endereco || endEntrega.logradouro || '',
+        numero:      end.numero || endEntrega.numero || 'S/N',
+        complemento: end.complemento || endEntrega.complemento || '',
+        bairro:      end.bairro || endEntrega.bairro || '',
+        cep:         String(end.cep || endEntrega.cep || '').replace(/\D/g, ''),
+        municipio:   end.municipio || end.cidade || endEntrega.municipio?.nome || endEntrega.municipio || endEntrega.cidade || '',
+        uf:          end.uf || endEntrega.municipio?.uf || endEntrega.uf || '',
+      };
+      if (endFinal.endereco) contatoPayload.endereco = endFinal;
+
+      // ── Itens — mapeia do pedido de venda para formato NF-e Bling v3 ───────
+      // Usando produto.id o Bling preenche NCM, CFOP, origem etc. automaticamente
       const itensPayload = itensBling.map((item: any) => {
         const entry: any = {
           descricao:  item.descricao || item.nome || 'Produto',
@@ -1910,95 +1943,123 @@ async function startServer() {
           valor:      Number(item.valor || item.valorUnitario || 0),
           tipo:       'P', // P=Produto, S=Serviço
         };
-        if (item.codigo || item.codigoProduto) entry.codigo = item.codigo || item.codigoProduto;
-        if (item.produto?.id || item.idProduto) entry.produto = { id: Number(item.produto?.id || item.idProduto) };
+        // Código do item
+        if (item.codigo || item.codigoProduto) entry.codigo = String(item.codigo || item.codigoProduto);
+        // ID do produto Bling — FUNDAMENTAL para NCM/CFOP/origem preenchidos automaticamente
+        const produtoId = item.produto?.id || item.idProduto;
+        if (produtoId) entry.produto = { id: Number(produtoId) };
+        // Desconto do item (se houver)
+        if (item.desconto != null && Number(item.desconto) > 0) {
+          entry.desconto = { valor: Number(item.desconto), unidade: 'REAL' };
+        }
         return entry;
       });
 
-      // Payload final
+      // ── Payload base da NF-e ───────────────────────────────────────────────
       const nfePayload: any = {
-        tipo:          1,
+        tipo:          1,  // 1=Saída
         dataOperacao,
         contato:       contatoPayload,
         itens:         itensPayload,
         pedidoVenda:   { id: Number(blingOrderId) },
+        finalidade:    1,  // 1=Normal
       };
 
-      // Natureza de operação — usa do pedido se disponível
+      // Natureza de operação — usa do pedido
       if (natOp?.id) nfePayload.naturezaOperacao = { id: Number(natOp.id) };
 
-      // Frete e transporte
-      if (pedidoData?.transporte?.transportador?.id) {
-        nfePayload.transporte = {
-          frete:        Number(pedidoData.transporte.fretePorConta ?? 9),  // 9 = sem frete
-          transportador: { id: pedidoData.transporte.transportador.id },
-        };
+      // ── Transporte / Frete ──────────────────────────────────────────────────
+      const transporte = pedidoData?.transporte || {};
+      const freteVal = Number(transporte.frete || transporte.fretePorConta || 0);
+      nfePayload.transporte = {
+        frete: (transporte.fretePorConta != null) ? Number(transporte.fretePorConta) : 9, // 9=sem frete
+      };
+      if (transporte.transportador?.id) {
+        nfePayload.transporte.transportador = { id: Number(transporte.transportador.id) };
+      }
+      if (transporte.volumes != null) {
+        nfePayload.transporte.volumes = [{ quantidade: Number(transporte.volumes || 1) }];
       }
 
-      // ─── CORREÇÃO CRÍTICA: Parcelas/pagamentos com validação total ─────────
-      // Calcula o total da nota a partir dos itens
-      const totalNota = itensPayload.reduce((sum, item) => sum + (item.quantidade * item.valor), 0);
-      
+      // ── Intermediador (marketplace) ─────────────────────────────────────────
+      if (pedidoData?.intermediador?.cnpj || pedidoData?.intermediador?.nomeUsuario) {
+        nfePayload.intermediador = {};
+        if (pedidoData.intermediador.cnpj) nfePayload.intermediador.cnpj = String(pedidoData.intermediador.cnpj).replace(/\D/g, '');
+        if (pedidoData.intermediador.nomeUsuario) nfePayload.intermediador.nomeUsuario = pedidoData.intermediador.nomeUsuario;
+      }
+
+      // ── Informações complementares ──────────────────────────────────────────
+      if (pedidoData?.observacoes || pedidoData?.observacoesInternas) {
+        nfePayload.informacoesComplementares = pedidoData.observacoes || pedidoData.observacoesInternas;
+      }
+
+      // ── PARCELAS / PAGAMENTO — campo correto = "data" (NÃO "vencimento") ──
+      const totalNota = itensPayload.reduce((sum: number, item: any) => sum + (item.quantidade * item.valor), 0)
+        + (freteVal > 0 ? freteVal : 0);
+
       if (Array.isArray(pedidoData?.parcelas) && pedidoData.parcelas.length > 0) {
-        // Parcelas originais com validação
-        const parcelasOriginais = pedidoData.parcelas
-          .map((p: any) => ({
-            formaPagamento: p.formaPagamento?.id ? { id: p.formaPagamento.id } : undefined,
-            valor: Number(p.valor || 0),
-            dataVencimento: p.dataVencimento || p.vencimento || null,
-          }))
+        const parcelasValidas = pedidoData.parcelas
+          .map((p: any, idx: number) => {
+            // Data de vencimento: campo = "data" no Bling v3 NF-e
+            let dtVenc = p.dataVencimento || p.data || p.vencimento || null;
+            if (!dtVenc || dtVenc === 'Invalid Date' || dtVenc === '0000-00-00') {
+              const d = new Date(now);
+              d.setDate(d.getDate() + Math.max((idx + 1) * 30, 1));
+              dtVenc = d.toISOString().split('T')[0];
+            } else if (typeof dtVenc === 'string') {
+              dtVenc = dtVenc.split('T')[0].split(' ')[0]; // "YYYY-MM-DD"
+            }
+            // Valida formato YYYY-MM-DD
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(dtVenc)) {
+              const d = new Date(now);
+              d.setDate(d.getDate() + Math.max((idx + 1) * 30, 1));
+              dtVenc = d.toISOString().split('T')[0];
+            }
+
+            const parcela: any = {
+              data: dtVenc,  // ← campo correto para Bling v3 NF-e
+              valor: Number(p.valor || 0),
+            };
+            // Forma de pagamento
+            const fmId = p.formaPagamento?.id || p.meio?.id;
+            if (fmId) parcela.formaPagamento = { id: Number(fmId) };
+            else parcela.formaPagamento = { id: 15 }; // 15 = Boleto bancário (padrão seguro)
+
+            // Observações da parcela
+            if (p.observacao) parcela.observacao = p.observacao;
+            return parcela;
+          })
           .filter((p: any) => p.valor > 0);
-        
-        // Validar e corrigir datas de vencimento
-        const parcelasComData = parcelasOriginais.map((p: any, idx: number) => {
-          let data = p.dataVencimento;
-          
-          // Se não tem data, gera a partir da data de operação + (idx * 30 dias)
-          if (!data || data === 'Invalid Date') {
-            const dataVenc = new Date(now);
-            dataVenc.setDate(dataVenc.getDate() + (idx + 1) * 30);
-            data = dataVenc.toISOString().split('T')[0];
-          } else if (typeof data === 'string') {
-            data = data.split('T')[0]; // Remove hora se tiver
+
+        // Ajustar total das parcelas para bater com total da nota
+        if (parcelasValidas.length > 0) {
+          const totalParcelas = parcelasValidas.reduce((s: number, p: any) => s + p.valor, 0);
+          const diff = Math.abs(totalNota - totalParcelas);
+          if (diff > 0.01) {
+            console.warn(`⚠️ [NFe] Parcelas R$ ${totalParcelas.toFixed(2)} ≠ Nota R$ ${totalNota.toFixed(2)}. Ajustando…`);
+            const last = parcelasValidas[parcelasValidas.length - 1];
+            const somaOutras = parcelasValidas.slice(0, -1).reduce((s: number, p: any) => s + p.valor, 0);
+            last.valor = Math.round((totalNota - somaOutras) * 100) / 100;
           }
-          
-          return {
-            formaPagamento: p.formaPagamento,
-            valor: p.valor,
-            vencimento: data,
-          };
-        });
-        
-        // Validar se total das parcelas = total da nota
-        const totalParcelas = parcelasComData.reduce((sum, p) => sum + p.valor, 0);
-        const diferenca = Math.abs(totalNota - totalParcelas);
-        
-        if (diferenca > 0.01) { // Tolerância de 1 centavo
-          console.warn(`⚠️ [NFe] Total das parcelas (R$ ${totalParcelas.toFixed(2)}) ≠ Total da nota (R$ ${totalNota.toFixed(2)}). Ajustando...`);
-          
-          // Ajusta a última parcela para bater o total
-          if (parcelasComData.length > 0) {
-            const ultimaIdx = parcelasComData.length - 1;
-            const somaOutras = parcelasComData.slice(0, ultimaIdx).reduce((sum, p) => sum + p.valor, 0);
-            parcelasComData[ultimaIdx].valor = Math.round((totalNota - somaOutras) * 100) / 100;
-          }
+          nfePayload.parcelas = parcelasValidas;
         }
-        
-        nfePayload.parcelas = parcelasComData;
-      } else if (totalNota > 0) {
-        // Se não tem parcelas, cria uma única parcela com o total
-        const dataVenc = new Date(now);
-        dataVenc.setDate(dataVenc.getDate() + 30);
-        nfePayload.parcelas = [{
-          valor: totalNota,
-          vencimento: dataVenc.toISOString().split('T')[0],
-          formaPagamento: { id: 15 }, // 15 = Boleto
-        }];
       }
 
-      console.log(`📄 [NFe] Criando NF-e para pedido Bling ${blingOrderId} com ${itensPayload.length} itens…`);
+      // Se não possui parcelas válidas, cria parcela única à vista
+      if (!nfePayload.parcelas || nfePayload.parcelas.length === 0) {
+        if (totalNota > 0) {
+          nfePayload.parcelas = [{
+            data: dataHoje,           // Pagamento à vista = data de hoje
+            valor: Math.round(totalNota * 100) / 100,
+            formaPagamento: { id: 15 }, // Boleto bancário
+          }];
+        }
+      }
 
-      // ─── Passo 1: Criar NF-e a partir do pedido de venda ───────────────────
+      console.log(`📄 [NFe] Payload NF-e para pedido ${blingOrderId}: ${itensPayload.length} itens, ${(nfePayload.parcelas||[]).length} parcela(s), total R$ ${totalNota.toFixed(2)}`);
+      console.log(`📄 [NFe] Contato: id=${contatoPayload.id}, nome=${contatoPayload.nome}, doc=${contatoPayload.numeroDocumento}, end=${endFinal.endereco}`);
+
+      // ─── Passo 1: Criar NF-e ───────────────────────────────────────────────
       const createResp = await fetch('https://www.bling.com.br/Api/v3/nfe', {
         method: 'POST',
         headers,
@@ -2009,8 +2070,7 @@ async function startServer() {
       try { createData = await createResp.json(); } catch { createData = {}; }
 
       if (!createResp.ok) {
-        console.error(`❌ [NFe] Erro ao criar:`, createData);
-        // Extrai mensagem detalhada do Bling v3 (inclui campos obrigatórios não preenchidos)
+        console.error(`❌ [NFe] Erro ao criar NF-e:`, JSON.stringify(createData, null, 2));
         const blingErr = createData?.error || createData?.errors?.[0] || {};
         const fields: string[] = Array.isArray(blingErr?.fields)
           ? blingErr.fields.map((f: any) => `${f.element || f.field || ''}: ${f.msg || f.message || ''}`).filter(Boolean)
@@ -2021,6 +2081,7 @@ async function startServer() {
           success: false,
           error: fullMsg,
           detail: createData,
+          payloadEnviado: nfePayload, // Debug — permite ver o que foi enviado
         });
       }
 
@@ -2043,7 +2104,6 @@ async function startServer() {
 
       if (!emitResp.ok) {
         console.error(`❌ [NFe] Erro ao emitir:`, emitData);
-        // NF-e foi criada mas não emitida — retorna sucesso parcial
         return res.status(emitResp.status).json({
           success: false,
           emitida: false,
@@ -2065,6 +2125,96 @@ async function startServer() {
     }
   });
 
+  // ────────────────────────────────────────────────────────────────────────────
+  // BUSCAR ETIQUETAS DE ENVIO DO BLING (logística/remessas)
+  // ────────────────────────────────────────────────────────────────────────────
+  app.post('/api/bling/etiquetas/buscar', async (req, res) => {
+    try {
+      const { pedidoVendaIds } = req.body as { pedidoVendaIds: (string | number)[] };
+      const rawAuth = req.headers.authorization || '';
+      const authToken = rawAuth.startsWith('Bearer ') ? rawAuth : `Bearer ${rawAuth}`;
+
+      if (!rawAuth) return res.status(401).json({ error: 'Token do Bling obrigatório' });
+      if (!Array.isArray(pedidoVendaIds) || pedidoVendaIds.length === 0) {
+        return res.status(400).json({ error: 'pedidoVendaIds[] obrigatório' });
+      }
+
+      const readH = { Authorization: authToken, Accept: 'application/json' };
+      const results: any[] = [];
+
+      for (const pvId of pedidoVendaIds) {
+        try {
+          // Busca detalhes do pedido para obter info de transporte
+          const pvResp = await fetch(
+            `https://www.bling.com.br/Api/v3/pedidos/vendas/${Number(pvId)}`,
+            { headers: readH },
+          );
+          if (!pvResp.ok) {
+            results.push({ pedidoVendaId: pvId, success: false, error: `Pedido ${pvId} não encontrado (${pvResp.status})` });
+            continue;
+          }
+          const pvData = (await pvResp.json().catch(() => ({})))?.data;
+          const transporte = pvData?.transporte || {};
+          const rastreamento = transporte.codigoRastreamento || '';
+          const volumes = Number(transporte.volumes || transporte.quantidadeVolumes || 1);
+          const nomeCliente = pvData?.contato?.nome || '';
+          const numero = pvData?.numero || pvData?.numeroLoja || pvId;
+          const itens = (pvData?.itens || []).map((i: any) => `${i.quantidade}x ${i.descricao}`).join(', ');
+          const endereco = pvData?.transporte?.enderecoEntrega || {};
+          const endStr = [endereco.endereco, endereco.numero, endereco.bairro, endereco.municipio?.nome || endereco.municipio, endereco.municipio?.uf || endereco.uf, (endereco.cep || '').replace(/\D/g, '')]
+            .filter(Boolean).join(', ');
+
+          // Gera ZPL com dados reais do pedido
+          const dataNow = new Date().toLocaleString('pt-BR');
+          const zpl = `^XA
+^PW800
+^LL1200
+^CF0,36
+^FO40,30^FDETIQUETA DE ENVIO^FS
+^FO40,75^GB720,3,3^FS
+^CF0,28
+^FO40,100^FDPedido: ${numero}^FS
+^FO40,140^FDCliente: ${(nomeCliente || '').slice(0, 40)}^FS
+^CF0,24
+^FO40,185^FDRastreamento: ${rastreamento || 'N/A'}^FS
+^FO40,220^FDVolumes: ${volumes}^FS
+^FO40,260^GB720,2,2^FS
+^FO40,280^FDItens: ${(itens || 'N/A').slice(0, 55)}^FS
+^FO40,320^GB720,2,2^FS
+^CF0,22
+^FO40,345^FDEndere${String.fromCharCode(231)}o:^FS
+^FO40,375^FD${(endStr || 'N/A').slice(0, 55)}^FS
+${(endStr || '').length > 55 ? `^FO40,405^FD${endStr.slice(55, 110)}^FS` : ''}
+^FO40,440^GB720,2,2^FS
+${rastreamento ? `^BY3,3,100\n^FO100,470^BCN,100,Y,N,N\n^FD${rastreamento}^FS` : `^BY3,3,100\n^FO100,470^BCN,100,Y,N,N\n^FD${numero}^FS`}
+^CF0,20
+^FO40,620^FDGerado: ${dataNow}^FS
+^FO40,650^FDOrigem: Bling / ERP^FS
+^XZ`;
+
+          results.push({
+            pedidoVendaId: pvId,
+            numero,
+            nomeCliente,
+            rastreamento,
+            success: true,
+            zpl,
+          });
+        } catch (e: any) {
+          results.push({ pedidoVendaId: pvId, success: false, error: e.message });
+        }
+      }
+
+      const ok = results.filter(r => r.success).length;
+      const fail = results.filter(r => !r.success).length;
+      console.log(`🏷️ [Etiquetas] ${ok} gerada(s), ${fail} falha(s) de ${pedidoVendaIds.length} pedido(s)`);
+      res.json({ success: true, total: pedidoVendaIds.length, ok, fail, results });
+    } catch (error: any) {
+      console.error('❌ [Etiquetas buscar]:', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   app.all(/^\/api\/bling\//, async (req, res, next) => {
     // Skip rotas já tratadas por handlers específicos — passa para o próximo handler
     if (
@@ -2073,6 +2223,7 @@ async function startServer() {
       req.path.startsWith('/api/bling/bulk') ||
       req.path.startsWith('/api/bling/export') ||
       req.path.startsWith('/api/bling/lotes') ||
+      req.path.startsWith('/api/bling/etiquetas') ||
       req.path === '/api/bling/token' ||
       req.path === '/api/bling/nfe/criar-emitir' ||
       req.path.startsWith('/api/bling/vendas')
