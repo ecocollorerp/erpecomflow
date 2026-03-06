@@ -331,6 +331,115 @@ export async function fetchEtiquetasLote(apiKey: string, pedidoVendaIds: string[
     return resp.json();
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// NOTAS FISCAIS DE SAÍDA — listar, detalhar, baixar XML/DANFE
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface NfeSaida {
+    id: number;
+    numero?: string;
+    serie?: string;
+    chaveAcesso?: string;
+    situacao?: number; // 1=Pendente, 5=Autorizada, 6=Emitida, 2=Cancelada...
+    situacaoDescr?: string;
+    dataEmissao?: string;
+    valorTotal?: number;
+    contato?: { id?: number; nome?: string };
+    linkDanfe?: string;
+    linkXml?: string;
+    xml?: string;
+}
+
+/**
+ * Busca notas fiscais de saída do Bling (tipo=1) com filtros de data e situação.
+ */
+export async function fetchNfeSaida(
+    apiKey: string,
+    opts: { dataInicial?: string; dataFinal?: string; situacao?: number; pagina?: number } = {}
+): Promise<NfeSaida[]> {
+    const authH = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`;
+    const params: Record<string, string> = {};
+    if (opts.dataInicial) params.dataInicial = opts.dataInicial;
+    if (opts.dataFinal) params.dataFinal = opts.dataFinal;
+    if (opts.situacao) params.situacao = String(opts.situacao);
+    if (opts.pagina) params.pagina = String(opts.pagina);
+
+    const resp = await fetch(`/api/bling/nfe/listar-saida?${new URLSearchParams(params).toString()}`, {
+        headers: { Authorization: authH, Accept: 'application/json' },
+    });
+    if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err?.error || `Erro ${resp.status}`);
+    }
+    const data = await resp.json();
+    const notas: any[] = data?.notas || data?.data || [];
+
+    // Mapeamento de situação ID → descrição legível
+    const sitMap: Record<number, string> = { 1: 'Pendente', 2: 'Cancelada', 3: 'Aguardando Recibo', 4: 'Rejeitada', 5: 'Autorizada', 6: 'Emitida', 7: 'Denegada', 8: 'Encerrada' };
+
+    return notas.map((n: any) => ({
+        id: n.id,
+        numero: n.numero ? String(n.numero) : undefined,
+        serie: n.serie ? String(n.serie) : undefined,
+        chaveAcesso: n.chaveAcesso || n.chave_acesso || undefined,
+        situacao: n.situacao,
+        situacaoDescr: sitMap[n.situacao] || `Situação ${n.situacao}`,
+        dataEmissao: n.dataEmissao || n.dataOperacao || n.data,
+        valorTotal: n.valorNota || n.total || n.valor || undefined,
+        contato: n.contato || undefined,
+        linkDanfe: n.linkDanfe || n.link || n.linkDANFE || undefined,
+        linkXml: n.linkXml || n.xml || undefined,
+    }));
+}
+
+/**
+ * Obtém detalhes completos de uma NF-e (XML, chave de acesso, links).
+ */
+export async function fetchNfeDetalhe(apiKey: string, nfeId: number): Promise<any> {
+    const authH = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`;
+    const resp = await fetch(`/api/bling/nfe/detalhe/${nfeId}`, {
+        headers: { Authorization: authH, Accept: 'application/json' },
+    });
+    if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err?.error || `Erro ${resp.status}`);
+    }
+    return resp.json();
+}
+
+/**
+ * Obtém detalhes de um pedido de venda do Bling.
+ */
+export async function fetchPedidoVendaDetalhe(apiKey: string, pedidoId: string | number): Promise<any> {
+    const authH = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`;
+    const resp = await fetch(`/api/bling/pedido-venda/${pedidoId}`, {
+        headers: { Authorization: authH, Accept: 'application/json' },
+    });
+    if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err?.error || `Erro ${resp.status}`);
+    }
+    return resp.json();
+}
+
+/**
+ * Atualiza um pedido de venda no Bling (PUT).
+ * Útil para corrigir dados fiscais, nome do cliente, etc.
+ */
+export async function atualizarPedidoVenda(apiKey: string, pedidoId: string | number, dados: any): Promise<any> {
+    const authH = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`;
+    const resp = await fetch(`/api/bling/pedido-venda/${pedidoId}`, {
+        method: 'PUT',
+        headers: { Authorization: authH, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(dados),
+    });
+    if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err?.error || `Erro ${resp.status}`);
+    }
+    return resp.json();
+}
+
 export async function fetchBlingProducts(apiKey: string): Promise<BlingProduct[]> {
     const params = {
         limit: '100',

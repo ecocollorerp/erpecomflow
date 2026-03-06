@@ -1,7 +1,8 @@
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { GeneralSettings, OrderItem, BlingInvoice, BlingProduct, BlingSettings, BlingScopeSettings, StockItem, SkuLink } from '../types';
-import { fetchBlingOrders, fetchBlingInvoices, fetchEtiquetaZplForPedido, fetchEtiquetasLote, fetchBlingProducts, executeBlingTokenExchange, executeTokenRefresh, syncBlingOrders, syncBlingInvoices } from '../lib/blingApi';
+import { fetchBlingOrders, fetchBlingInvoices, fetchEtiquetaZplForPedido, fetchEtiquetasLote, fetchBlingProducts, executeBlingTokenExchange, executeTokenRefresh, syncBlingOrders, syncBlingInvoices, fetchNfeSaida, fetchNfeDetalhe, fetchPedidoVendaDetalhe, atualizarPedidoVenda } from '../lib/blingApi';
+import type { NfeSaida } from '../lib/blingApi';
 import { addPendingZplItem } from '../utils/pendingZpl';
 import { BlingSync } from '../components/BlingSync';
 // NFeManager integrado diretamente no BlingPage
@@ -738,6 +739,14 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
     // Modal NF-e — escolha entre Bling ou ERP próprio
     const [showGerarNFeModal, setShowGerarNFeModal] = useState(false);
     const [nfeModalOrder, setNfeModalOrder] = useState<any | null>(null);
+    // NF-e de saída do Bling (notas emitidas)
+    const [nfeSaida, setNfeSaida] = useState<NfeSaida[]>([]);
+    const [isLoadingNfeSaida, setIsLoadingNfeSaida] = useState(false);
+    const [nfeSaidaFiltro, setNfeSaidaFiltro] = useState<'todas' | 'autorizadas' | 'pendentes'>('autorizadas');
+    const [nfeSaidaSearch, setNfeSaidaSearch] = useState('');
+    // Editar pedido de venda (dados fiscais, nome)
+    const [editPedidoModal, setEditPedidoModal] = useState<{ id: string; data: any } | null>(null);
+    const [isSavingPedido, setIsSavingPedido] = useState(false);
     // Modal modo ZPL — escolha entre DANFE+Etiqueta ou apenas Etiqueta
     const [zplModeModal, setZplModeModal] = useState<{ zpl: string; loteId: string; descricao?: string } | null>(null);
     // Estoque
@@ -940,7 +949,8 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
                 });
                 if (!resp.ok) return;
                 const data = await resp.json();
-                const list = Array.isArray(data?.data) ? data.data : [];
+                // Suporta ambos formatos: { canais: [...] } (endpoint dedicado) ou { data: [...] } (proxy Bling)
+                const list = Array.isArray(data?.canais) ? data.canais : (Array.isArray(data?.data) ? data.data : []);
                 // Normaliza campos usando 'descricao' ou 'nome' e 'tipo' ou 'sigla'
                 const normalized = list.map((c: any) => ({
                     id: Number(c.id || 0),
@@ -1189,6 +1199,115 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
             if (zpl) setZplModeModal({ zpl, loteId: `ZPL-NF-${invoice.id}`, descricao: invoice.idPedidoVenda });
         } catch (error: any) { addToast(`Erro ao gerar ZPL: ${error.message}`, 'error'); } 
         finally { setGeneratingZplId(null); }
+    };
+
+    // ── NOTAS FISCAIS DE SAÍDA — buscar no Bling ────────────────────────────
+    const handleFetchNfeSaida = async () => {
+        setIsLoadingNfeSaida(true);
+        try {
+            const token = await getValidToken();
+            if (!token) throw new Error('Token inválido.');
+            const situacaoMap: Record<string, number | undefined> = { todas: undefined, autorizadas: 5, pendentes: 1 };
+            const notas = await fetchNfeSaida(token, {
+                dataInicial: filters.startDate,
+                dataFinal: filters.endDate,
+                situacao: situacaoMap[nfeSaidaFiltro],
+            });
+            setNfeSaida(notas);
+            addToast(`${notas.length} nota(s) fiscal(is) de saída encontrada(s).`, notas.length > 0 ? 'success' : 'info');
+        } catch (err: any) {
+            addToast(`Erro ao buscar NF-e de saída: ${err.message}`, 'error');
+        } finally {
+            setIsLoadingNfeSaida(false);
+        }
+    };
+
+    // ── Copiar chave de acesso / abrir DANFE ─────────────────────────────────
+    const handleCopiarChave = async (nfe: NfeSaida) => {
+        if (nfe.chaveAcesso) {
+            await navigator.clipboard.writeText(nfe.chaveAcesso);
+            addToast('Chave de acesso copiada!', 'success');
+            return;
+        }
+        // Busca detalhe para obter chave
+        try {
+            const token = await getValidToken();
+            if (!token) return;
+            const detalhe = await fetchNfeDetalhe(token, nfe.id);
+            const chave = detalhe?.data?.chaveAcesso || detalhe?.chaveAcesso;
+            if (chave) {
+                await navigator.clipboard.writeText(chave);
+                addToast('Chave de acesso copiada!', 'success');
+            } else {
+                addToast('Chave de acesso não disponível.', 'info');
+            }
+        } catch (err: any) {
+            addToast(`Erro: ${err.message}`, 'error');
+        }
+    };
+
+    const handleAbrirDanfe = async (nfe: NfeSaida) => {
+        if (nfe.linkDanfe) {
+            window.open(nfe.linkDanfe, '_blank');
+            return;
+        }
+        // Busca detalhe para obter link DANFE
+        try {
+            const token = await getValidToken();
+            if (!token) return;
+            const detalhe = await fetchNfeDetalhe(token, nfe.id);
+            const link = detalhe?.data?.linkDanfe || detalhe?.data?.link || detalhe?.linkDanfe;
+            if (link) {
+                window.open(link, '_blank');
+            } else {
+                addToast('Link do DANFE não disponível.', 'info');
+            }
+        } catch (err: any) {
+            addToast(`Erro: ${err.message}`, 'error');
+        }
+    };
+
+    const handleDownloadXml = async (nfe: NfeSaida) => {
+        try {
+            const token = await getValidToken();
+            if (!token) return;
+            const detalhe = await fetchNfeDetalhe(token, nfe.id);
+            const xmlData = detalhe?.data?.xml || detalhe?.xml || nfe.linkXml;
+            if (xmlData && xmlData.startsWith('http')) {
+                window.open(xmlData, '_blank');
+            } else if (xmlData) {
+                const blob = new Blob([xmlData], { type: 'application/xml' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `NFe_${nfe.numero || nfe.id}.xml`;
+                a.click();
+                URL.revokeObjectURL(url);
+                addToast('XML baixado!', 'success');
+            } else {
+                addToast('XML não disponível.', 'info');
+            }
+        } catch (err: any) {
+            addToast(`Erro: ${err.message}`, 'error');
+        }
+    };
+
+    // ── Editar pedido de venda (corrigir dados fiscais) ──────────────────────
+    const handleSalvarPedido = async () => {
+        if (!editPedidoModal) return;
+        setIsSavingPedido(true);
+        try {
+            const token = await getValidToken();
+            if (!token) throw new Error('Token inválido.');
+            await atualizarPedidoVenda(token, editPedidoModal.id, editPedidoModal.data);
+            addToast(`Pedido ${editPedidoModal.id} atualizado com sucesso!`, 'success');
+            setEditPedidoModal(null);
+            await handleFetchOrdersAndInvoices();
+        } catch (err: any) {
+            addToast(`Erro ao atualizar pedido: ${err.message}`, 'error');
+        } finally {
+            setIsSavingPedido(false);
+        }
     };
 
     /**
@@ -2261,6 +2380,31 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
                                                                                 </button>
                                                                             </>
                                                                         )}
+                                                                        {/* Editar pedido de venda (corrigir dados fiscais, nome) */}
+                                                                        {order.blingId && !order.invoice && (
+                                                                            <button
+                                                                                onClick={async () => {
+                                                                                    try {
+                                                                                        const token = await getValidToken();
+                                                                                        if (!token) return;
+                                                                                        const detalhe = await fetchPedidoVendaDetalhe(token, order.blingId);
+                                                                                        const ped = detalhe?.data || detalhe;
+                                                                                        setEditPedidoModal({
+                                                                                            id: order.blingId,
+                                                                                            data: {
+                                                                                                contato: { nome: ped?.contato?.nome || order.customer_name, numeroDocumento: ped?.contato?.numeroDocumento || '' },
+                                                                                                observacoes: ped?.observacoes || '',
+                                                                                                observacoesInternas: ped?.observacoesInternas || '',
+                                                                                            },
+                                                                                        });
+                                                                                    } catch (err: any) { addToast(`Erro ao carregar pedido: ${err.message}`, 'error'); }
+                                                                                }}
+                                                                                title="Editar dados do pedido (nome, CPF, obs)"
+                                                                                className="flex items-center gap-1 text-[10px] font-black uppercase tracking-widest bg-amber-50 text-amber-700 px-2.5 py-2 rounded-xl hover:bg-amber-100 border border-amber-100 transition-all"
+                                                                            >
+                                                                                <Settings size={12}/> Editar
+                                                                            </button>
+                                                                        )}
                                                                         {order.invoice?.linkDanfe && (
                                                                             <a href={order.invoice.linkDanfe} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-[10px] font-black uppercase tracking-widest bg-orange-50 text-orange-600 px-3 py-2 rounded-xl hover:bg-orange-100 border border-orange-100 transition-all">
                                                                                 <FileText size={14}/> DANFE
@@ -2291,6 +2435,125 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
 
                     </div>
                     {/* fim painel principal */}
+
+                    {/* ── Painel Notas Fiscais de Saída (buscar DANFE / XML do Bling) ── */}
+                    <div className="flex-1 bg-white p-6 rounded-3xl border border-gray-200 shadow-xl min-w-0 mt-4">
+                        <div className="flex justify-between items-start mb-4 flex-wrap gap-3">
+                            <div>
+                                <h3 className="text-lg font-black text-slate-800 uppercase tracking-tighter flex items-center gap-2">
+                                    <Download className="text-orange-600" size={18}/> Notas Fiscais de Saída
+                                </h3>
+                                <p className="text-[11px] text-slate-400 mt-0.5">Consulte NF-e emitidas no Bling. Baixe DANFE, XML ou copie a chave de acesso.</p>
+                            </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-end gap-3 mb-4">
+                            <div>
+                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 block">Situação</label>
+                                <select value={nfeSaidaFiltro} onChange={e => setNfeSaidaFiltro(e.target.value as any)} className="p-2 border-2 border-slate-200 rounded-xl bg-white font-bold text-sm outline-none focus:border-orange-400">
+                                    <option value="autorizadas">Autorizadas</option>
+                                    <option value="pendentes">Pendentes</option>
+                                    <option value="todas">Todas</option>
+                                </select>
+                            </div>
+                            <div className="relative flex-1 min-w-[180px]">
+                                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+                                <input
+                                    type="text" value={nfeSaidaSearch} onChange={e => setNfeSaidaSearch(e.target.value)}
+                                    placeholder="Buscar por número ou cliente..."
+                                    className="w-full pl-10 p-2 border-2 border-slate-200 rounded-xl bg-white font-bold text-sm outline-none focus:border-orange-400"
+                                />
+                            </div>
+                            <button onClick={handleFetchNfeSaida} disabled={isLoadingNfeSaida} className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white font-black uppercase text-xs tracking-widest rounded-xl hover:bg-orange-600 disabled:opacity-50 transition-all shadow-lg shadow-orange-100 active:scale-95">
+                                {isLoadingNfeSaida ? <Loader2 size={14} className="animate-spin"/> : <Download size={14}/>} Buscar NF-e
+                            </button>
+                        </div>
+
+                        {nfeSaida.length > 0 && (() => {
+                            const term = nfeSaidaSearch.toLowerCase();
+                            const filtered = nfeSaida.filter(n =>
+                                !term ||
+                                (n.numero && n.numero.includes(term)) ||
+                                (n.contato?.nome && n.contato.nome.toLowerCase().includes(term)) ||
+                                (n.chaveAcesso && n.chaveAcesso.includes(term))
+                            );
+
+                            // Agrupar por data de emissão
+                            const grouped = new Map<string, NfeSaida[]>();
+                            filtered.forEach(n => {
+                                const dt = n.dataEmissao ? n.dataEmissao.split(' ')[0].split('T')[0] : 'Sem data';
+                                if (!grouped.has(dt)) grouped.set(dt, []);
+                                grouped.get(dt)!.push(n);
+                            });
+                            // Ordenar datas decrescente
+                            const sortedDates = [...grouped.keys()].sort((a, b) => b.localeCompare(a));
+
+                            return (
+                                <div className="space-y-4">
+                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{filtered.length} nota(s) encontrada(s) — organizadas por data</p>
+                                    {sortedDates.map(date => {
+                                        const notas = grouped.get(date)!;
+                                        const dateLabel = date === 'Sem data' ? date : new Date(date + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+                                        return (
+                                            <div key={date} className="border border-slate-100 rounded-2xl overflow-hidden">
+                                                <div className="bg-slate-50 px-4 py-2 border-b border-slate-100 flex items-center gap-2">
+                                                    <Clock size={12} className="text-slate-400"/>
+                                                    <span className="text-xs font-black text-slate-600 uppercase tracking-wide">{dateLabel}</span>
+                                                    <span className="text-[10px] text-slate-400 font-bold ml-auto">{notas.length} nota(s)</span>
+                                                </div>
+                                                <table className="min-w-full text-sm">
+                                                    <thead className="bg-slate-800 text-white">
+                                                        <tr>
+                                                            {['Nº', 'Cliente', 'Valor', 'Situação', 'Ações'].map(h =>
+                                                                <th key={h} className="p-3 text-left text-[9px] font-black uppercase tracking-widest">{h}</th>
+                                                            )}
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-slate-50">
+                                                        {notas.map(nfe => (
+                                                            <tr key={nfe.id} className="hover:bg-orange-50/40 transition-colors">
+                                                                <td className="p-3 font-black text-slate-700">{nfe.numero || nfe.id}</td>
+                                                                <td className="p-3 font-bold text-slate-600 max-w-[200px] truncate">{nfe.contato?.nome || '-'}</td>
+                                                                <td className="p-3 font-black text-emerald-600">{nfe.valorTotal != null ? nfe.valorTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '-'}</td>
+                                                                <td className="p-3">
+                                                                    <span className={`px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${
+                                                                        nfe.situacao === 5 || nfe.situacao === 6 ? 'bg-green-100 text-green-700' :
+                                                                        nfe.situacao === 1 ? 'bg-yellow-100 text-yellow-700' :
+                                                                        nfe.situacao === 2 ? 'bg-red-100 text-red-700' :
+                                                                        'bg-gray-100 text-gray-500'
+                                                                    }`}>{nfe.situacaoDescr}</span>
+                                                                </td>
+                                                                <td className="p-3">
+                                                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                                                        <button onClick={() => handleAbrirDanfe(nfe)} title="Abrir DANFE" className="flex items-center gap-1 text-[9px] font-black uppercase tracking-widest bg-orange-50 text-orange-600 px-2.5 py-1.5 rounded-lg hover:bg-orange-100 border border-orange-100 transition-all">
+                                                                            <Eye size={12}/> DANFE
+                                                                        </button>
+                                                                        <button onClick={() => handleDownloadXml(nfe)} title="Baixar XML" className="flex items-center gap-1 text-[9px] font-black uppercase tracking-widest bg-blue-50 text-blue-600 px-2.5 py-1.5 rounded-lg hover:bg-blue-100 border border-blue-100 transition-all">
+                                                                            <Download size={12}/> XML
+                                                                        </button>
+                                                                        <button onClick={() => handleCopiarChave(nfe)} title="Copiar chave de acesso" className="flex items-center gap-1 text-[9px] font-black uppercase tracking-widest bg-slate-50 text-slate-600 px-2.5 py-1.5 rounded-lg hover:bg-slate-100 border border-slate-100 transition-all">
+                                                                            <Copy size={12}/> Chave
+                                                                        </button>
+                                                                    </div>
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            );
+                        })()}
+
+                        {nfeSaida.length === 0 && !isLoadingNfeSaida && (
+                            <div className="text-center py-10 text-slate-300">
+                                <FileText size={48} className="mx-auto mb-3 opacity-30"/>
+                                <p className="text-sm font-bold">Clique em "Buscar NF-e" para carregar notas fiscais de saída do Bling.</p>
+                            </div>
+                        )}
+                    </div>
 
                 </div>
             )}
@@ -2586,8 +2849,8 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
                         <div className="space-y-3">
                             {/* Via Bling */}
                             <div className="border-2 border-blue-100 rounded-2xl p-4 hover:border-blue-300 transition-all">
-                                <p className="text-xs font-black text-blue-700 uppercase tracking-widest mb-1 flex items-center gap-1.5"><span className="w-2 h-2 bg-blue-500 rounded-full inline-block"/>Via Bling</p>
-                                <p className="text-xs text-slate-500 mb-3">Usa o certificado digital configurado no Bling para gerar e/ou emitir a NF-e.</p>
+                                <p className="text-xs font-black text-blue-700 uppercase tracking-widest mb-1 flex items-center gap-1.5"><span className="w-2 h-2 bg-blue-500 rounded-full inline-block"/>Via Bling (Recomendado)</p>
+                                <p className="text-xs text-slate-500 mb-3">Gera NF-e diretamente do pedido de venda via rota nativa do Bling. Itens, contato, parcelas e frete são preenchidos automaticamente.</p>
                                 <div className="flex gap-2">
                                     <button
                                         onClick={() => { setShowGerarNFeModal(false); handleGerarNFeDoPedido(nfeModalOrder.orderId || nfeModalOrder.blingId, nfeModalOrder, false, 'bling'); setNfeModalOrder(null); }}
@@ -2623,6 +2886,66 @@ const BlingPage: React.FC<BlingPageProps> = ({ generalSettings, onSaveSettings, 
                         <button onClick={() => { setShowGerarNFeModal(false); setNfeModalOrder(null); }} className="mt-5 w-full text-xs text-slate-400 hover:text-slate-600 font-semibold py-2">
                             Cancelar
                         </button>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Modal Editar Pedido de Venda ────────────────────────────────── */}
+            {editPedidoModal && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-3xl border border-gray-200 shadow-2xl w-full max-w-lg p-8 animate-in fade-in zoom-in-95">
+                        <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight flex items-center gap-2">
+                                <Settings className="text-amber-600" size={20}/> Editar Pedido #{editPedidoModal.id}
+                            </h3>
+                            <button onClick={() => setEditPedidoModal(null)} className="p-2 rounded-full hover:bg-slate-100 text-slate-400">
+                                <X size={18}/>
+                            </button>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 block">Nome do Contato</label>
+                                <input
+                                    type="text" value={editPedidoModal.data?.contato?.nome || ''}
+                                    onChange={e => setEditPedidoModal(prev => prev ? { ...prev, data: { ...prev.data, contato: { ...prev.data.contato, nome: e.target.value } } } : null)}
+                                    className="w-full p-3 border-2 border-slate-200 rounded-xl bg-white font-bold text-sm outline-none focus:border-amber-400"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 block">CPF/CNPJ</label>
+                                <input
+                                    type="text" value={editPedidoModal.data?.contato?.numeroDocumento || ''}
+                                    onChange={e => setEditPedidoModal(prev => prev ? { ...prev, data: { ...prev.data, contato: { ...prev.data.contato, numeroDocumento: e.target.value } } } : null)}
+                                    className="w-full p-3 border-2 border-slate-200 rounded-xl bg-white font-bold text-sm outline-none focus:border-amber-400"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 block">Observações</label>
+                                <textarea
+                                    value={editPedidoModal.data?.observacoes || ''} rows={2}
+                                    onChange={e => setEditPedidoModal(prev => prev ? { ...prev, data: { ...prev.data, observacoes: e.target.value } } : null)}
+                                    className="w-full p-3 border-2 border-slate-200 rounded-xl bg-white font-bold text-sm outline-none focus:border-amber-400 resize-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 block">Observações Internas</label>
+                                <textarea
+                                    value={editPedidoModal.data?.observacoesInternas || ''} rows={2}
+                                    onChange={e => setEditPedidoModal(prev => prev ? { ...prev, data: { ...prev.data, observacoesInternas: e.target.value } } : null)}
+                                    className="w-full p-3 border-2 border-slate-200 rounded-xl bg-white font-bold text-sm outline-none focus:border-amber-400 resize-none"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="flex gap-3 mt-6">
+                            <button onClick={() => setEditPedidoModal(null)} className="flex-1 text-xs font-black uppercase tracking-widest py-3 rounded-xl border-2 border-slate-200 text-slate-500 hover:bg-slate-50 transition-all">
+                                Cancelar
+                            </button>
+                            <button onClick={handleSalvarPedido} disabled={isSavingPedido} className="flex-1 flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest py-3 rounded-xl bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 transition-all shadow-lg shadow-amber-100">
+                                {isSavingPedido ? <Loader2 size={14} className="animate-spin"/> : <Save size={14}/>} Salvar
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
